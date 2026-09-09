@@ -4,7 +4,9 @@ not part of the modelled/exported building geometry).
 
 Same caveat as ``bag_client``: this sandbox cannot reach PDOK, so verify
 typeNames against ``{BGT_WFS_URL}?service=WFS&request=GetCapabilities`` on
-your own machine.
+your own machine. Fetches go through ``requests`` rather than
+``geopandas.read_file()`` for the same reason as ``bag_client`` -- see its
+module docstring.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from typing import List
 
 import geopandas as gpd
 
-from .bag_client import BBox, RD_NEW_EPSG, _wfs_url
+from .bag_client import BBox, _fetch_wfs_geojson, _geojson_to_gdf, _wfs_url
 
 BGT_WFS_URL = "https://service.pdok.nl/lv/bgt/wfs/v1_0"
 
@@ -27,12 +29,7 @@ DEFAULT_CONTEXT_LAYERS = [
 
 def fetch_context_layer(layer: str, bbox: BBox, max_features: int = 5000) -> gpd.GeoDataFrame:
     url = _wfs_url(BGT_WFS_URL, layer, bbox, max_features)
-    gdf = gpd.read_file(url)
-    if gdf.crs is None:
-        gdf = gdf.set_crs(RD_NEW_EPSG)
-    elif gdf.crs.to_string() != RD_NEW_EPSG:
-        gdf = gdf.to_crs(RD_NEW_EPSG)
-    return gdf
+    return _geojson_to_gdf(_fetch_wfs_geojson(url))
 
 
 def fetch_context(bbox: BBox, layers: List[str] = None) -> dict:

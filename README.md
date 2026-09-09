@@ -128,6 +128,17 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
   been exercised against the live service in this repo's dev environment
   (no outbound network access to `pdok.nl` there) -- if PDOK has changed
   something, check `{WFS_URL}?service=WFS&request=GetCapabilities`.
+- **WFS fetches use `requests`, not `geopandas.read_file()`'s built-in URL
+  reading** -- the latter delegates to GDAL/pyogrio's own internal libcurl
+  client, which doesn't share Python's proxy environment variables or
+  certificate store. On a corporate network with a TLS-inspecting proxy
+  (which re-signs HTTPS traffic with an internal root CA), that caused a
+  cryptic `Failed to open dataset` error even though the same URL worked
+  fine in a browser. Routing through `requests` fixes this since it picks
+  up the same configuration `pip` already uses successfully. If a fetch
+  still fails with a certificate error, point the `REQUESTS_CA_BUNDLE` (or
+  `SSL_CERT_FILE`) environment variable at your organization's root CA
+  certificate -- don't disable certificate verification.
 
 ## Roadmap
 
@@ -172,6 +183,7 @@ pytest
 ```
 
 The suite covers roof geometry, the CityGML writer, LiDAR height stats,
-session (de)serialization, and the Flask REST API (via Flask's test
-client -- `/api/area`'s PDOK call is monkeypatched rather than hitting
-the network).
+session (de)serialization, the BAG/BGT WFS fetch logic (`requests.get` is
+mocked), and the Flask REST API (via Flask's test client -- `/api/area`'s
+BAG fetch is monkeypatched at the function level rather than hitting the
+network).
