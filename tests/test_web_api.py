@@ -10,6 +10,7 @@ import json
 from io import BytesIO
 
 import geopandas as gpd
+import numpy as np
 import pytest
 from lxml import etree
 from shapely.geometry import box
@@ -99,43 +100,68 @@ class TestBuildings:
         res = client.get("/api/buildings/does-not-exist")
         assert res.status_code == 404
 
-    def test_mesh_for_unmodelled_building_is_flat_fallback(self, client):
+    def test_mesh_for_fresh_building_is_seeded_flat_box(self, client):
         server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
         res = client.get("/api/buildings/A/mesh")
         assert res.status_code == 200
         data = res.get_json()
         assert len(data["vertices"]) % 3 == 0
-        assert len(data["faces"]) % 3 == 0
-        assert len(data["faces"]) > 0
+        assert len(data["triangles"]) % 3 == 0
+        assert len(data["triangles"]) > 0
+        assert len(data["faces"]) == 6  # 4 walls + roof + ground
 
-    def test_set_roof_updates_status_and_mesh(self, client):
+    def test_move_vertex_updates_status_and_mesh(self, client):
         server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
-        res = client.post(
-            "/api/buildings/A/roof",
-            json={"roof_type": "gable", "eave_height": 3.0, "ridge_height": 5.0, "ridge_along": "long"},
-        )
+        res = client.post("/api/buildings/A/vertex/0", json={"x": 1.0, "y": 2.0, "z": 9.0})
         assert res.status_code == 200
         data = res.get_json()
         assert data["building"]["status"] == "edited"
-        assert data["building"]["roof"]["roof_type"] == "gable"
-        assert len(data["mesh"]["faces"]) > 0
+        assert data["mesh"]["vertices"][0:3] == [1.0, 2.0, 9.0]
 
-    def test_set_roof_on_unknown_building_404(self, client):
-        res = client.post(
-            "/api/buildings/nope/roof",
-            json={"roof_type": "flat", "eave_height": 3.0},
+    def test_move_vertex_on_unknown_building_404(self, client):
+        res = client.post("/api/buildings/nope/vertex/0", json={"x": 0.0, "y": 0.0, "z": 0.0})
+        assert res.status_code == 404
+
+    def test_move_vertex_out_of_range_404(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/vertex/999", json={"x": 0.0, "y": 0.0, "z": 0.0})
+        assert res.status_code == 404
+
+    def test_move_vertex_uses_origin_relative_coordinates(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        server_module.state.origin = (100.0, 200.0, 0.0)
+        client.post("/api/buildings/A/vertex/0", json={"x": 1.0, "y": 2.0, "z": 9.0})
+        building = server_module.state.buildings[0]
+        assert building.mesh().vertices[0] == (101.0, 202.0, 9.0)
+
+    def test_snap_vertex_to_lidar(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        cloud = server_module.LidarPointCloud(
+            x=np.array([1.0, 1.1, 0.9]),
+            y=np.array([2.0, 2.1, 1.9]),
+            z=np.array([5.0, 5.2, 4.8]),
         )
+        server_module.state.lidar_cloud = cloud
+        building = server_module.state.buildings[0]
+        building.move_vertex(0, (1.0, 2.0, 0.0))
+
+        res = client.post("/api/buildings/A/vertex/0/snap_lidar")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["snapped_z"] == pytest.approx(5.0, abs=0.2)
+        assert building.mesh().vertices[0][2] == pytest.approx(5.0, abs=0.2)
+
+    def test_snap_vertex_to_lidar_no_points_nearby_404(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/vertex/0/snap_lidar")
         assert res.status_code == 404
 
 
 class TestSession:
-    def test_round_trip_preserves_roof_and_recomputes_origin(self, client):
+    def test_round_trip_preserves_edited_geometry_and_recomputes_origin(self, client):
         b = Building(bag_id="A", footprint=box(0, 0, 10, 6))
         server_module.state.buildings = [b]
-        client.post(
-            "/api/buildings/A/roof",
-            json={"roof_type": "hip", "eave_height": 3.0, "ridge_height": 6.0},
-        )
+        client.post("/api/buildings/A/vertex/0", json={"x": 1.0, "y": 2.0, "z": 9.0})
 
         download = client.get("/api/session")
         assert download.status_code == 200
@@ -149,7 +175,9 @@ class TestSession:
         assert upload.status_code == 200
         data = upload.get_json()
         assert len(data["buildings"]) == 1
-        assert data["buildings"][0]["roof"]["roof_type"] == "hip"
+        assert data["buildings"][0]["status"] == "edited"
+        restored = server_module.state.buildings[0]
+        assert restored.mesh().vertices[0] == (1.0, 2.0, 9.0)
 
     def test_upload_missing_file_400(self, client):
         res = client.post("/api/session", data={}, content_type="multipart/form-data")
@@ -185,19 +213,16 @@ class TestSessionAutosave:
     """The background autosave/autoload flow (separate from the explicit
     download/upload session endpoints in TestSession above)."""
 
-    def test_setting_a_roof_autosaves(self, client, tmp_path, monkeypatch):
+    def test_moving_a_vertex_autosaves(self, client, tmp_path, monkeypatch):
         monkeypatch.setattr(autosave_module, "AUTOSAVE_PATH", tmp_path / "auto.json")
         server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
 
-        client.post(
-            "/api/buildings/A/roof",
-            json={"roof_type": "flat", "eave_height": 3.0},
-        )
+        client.post("/api/buildings/A/vertex/0", json={"x": 1.0, "y": 2.0, "z": 9.0})
 
         assert (tmp_path / "auto.json").exists()
         restored = autosave_module.load()
         assert restored[0].bag_id == "A"
-        assert restored[0].roof.roof_type.value == "flat"
+        assert restored[0].mesh().vertices[0] == (1.0, 2.0, 9.0)
 
     def test_new_app_instance_restores_autosaved_state(self, tmp_path, monkeypatch):
         monkeypatch.setattr(autosave_module, "AUTOSAVE_PATH", tmp_path / "auto.json")

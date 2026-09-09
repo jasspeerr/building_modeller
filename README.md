@@ -6,10 +6,12 @@ export the result as a static CityGML 2.0 file. It's a small Flask server
 plus a browser-based Three.js viewer -- everything runs on your own
 machine, nothing is served publicly.
 
-**LiDAR is currently used only to suggest height values** (ground / eave /
-ridge percentiles per footprint) for a roof shape you pick manually --
-there is no automatic plane-fitting reconstruction yet (see "Roadmap"
-below).
+**Every building starts as a simple flat box and is shaped by hand** --
+select a vertex and drag it (or type exact coordinates), snapping it to
+the LiDAR point cloud when you want the real surface. There is no
+roof-type picker and no automatic plane-fitting reconstruction (see
+"Roadmap" below); LiDAR height statistics only seed the box's starting
+height and are available as an explicit per-vertex snap.
 
 > This started as a PySide6 desktop GUI, but PySide6/shiboken6's compiled
 > Qt bindings turned out to be too fragile on a locked-down Windows
@@ -85,20 +87,27 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
    preview appears in the viewport, alongside the LiDAR point cloud
    (colored by elevation) and all footprint outlines as a visual
    reference.
-3. **Selected building** (right panel): pick a roof type (flat, shed,
-   gable, hip, pyramid), click **Use LiDAR suggestion** to seed the eave/
-   ridge heights from the point cloud stats, then fine-tune them. The 3D
-   preview updates live as you change values.
-4. Repeat for the buildings you care about. Buildings you never touch are
-   still exported, as a flat-topped box, so a batch export never silently
-   drops one -- check the status tag (`unmodelled` / `edited` /
-   `exported`) in the list to see what still needs attention.
+3. **Shape it** (viewport + right panel): the building starts as a flat
+   box seeded from its BAG footprint and a LiDAR-suggested height. Small
+   markers show every vertex (wall corners, roof corners) -- click one to
+   select it, or click-and-drag it vertically (hold and move the mouse up/
+   down) to push/pull it in real time. The right panel shows the selected
+   vertex's exact X/Y/Z (editable directly) and which surfaces it belongs
+   to (wall/roof/ground); **Snap to LiDAR (Z)** sets its height to the
+   median of nearby LiDAR points (within 1m) instead of eyeballing it.
+   There's no roof-type picker -- shape roofs, walls, anything, by moving
+   the vertices that make them up (adding/removing vertices, and
+   splitting/extruding faces, are planned follow-ups -- see "Roadmap").
+4. Repeat for the buildings you care about. Buildings you never touch stay
+   as their seeded flat box, so a batch export never silently drops one --
+   check the status tag (`unmodelled` / `edited` / `exported`) in the list
+   to see what still needs attention.
 5. **Save session** downloads a JSON file with the batch's modelling
    state; **Load session** re-uploads one to continue later (this does
-   not restore the point cloud view, only footprints/roofs). This is
+   not restore the point cloud view, only footprints/geometry). This is
    separate from -- and in addition to -- automatic persistence: the app
    also autosaves the current batch to `~/.building_modeller/last_session.json`
-   after every area load, roof edit, or session upload, and restores it
+   after every area load, vertex edit, or session upload, and restores it
    automatically the next time you open the page or restart the server
    (again without the point cloud -- reload the area to bring that back).
 6. **Export CityGML** downloads one CityGML 2.0 file for every building
@@ -112,27 +121,22 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
 ## Known MVP limitations
 
 - **Footprint holes** (courtyard buildings) are not supported -- only the
-  exterior ring of a footprint is used.
-- **`gable` roofs** are still built on the footprint's minimum rotated
-  bounding rectangle rather than its exact outline -- a gable roof needs a
-  well-defined "which two edges are the gable ends" answer, which has no
-  general solution for an arbitrary polygon without new UI to let the user
-  designate them. `flat`, `shed`, `hip`, and `pyramid` roofs all follow the
-  real footprint and work on any simple polygon, including concave ones
-  (e.g. L-shaped buildings).
-- **`hip` roofs are an approximation, not a true straight skeleton.** Hip
-  roof height is computed from distance to the nearest footprint edge over
-  a fine triangulation of the footprint, rather than a real event-based
-  straight-skeleton algorithm (no lightweight, pip-installable option was
-  available without a git-URL dependency and an LGPL license -- see
-  `model/roofshapes.py`'s module docstring). This is exact for a rectangle
-  and looks correct for typical L-shaped buildings, but produces many
-  small triangular `RoofSurface` polygons per building rather than a
-  handful of large planar ones -- larger or more complex footprints will
-  produce correspondingly larger CityGML exports. The triangulation
-  density is a module-level constant (`HIP_ROOF_MESH_RESOLUTION` in
-  `model/roofshapes.py`, default 1.5m) if you need to trade off detail vs.
-  file size.
+  exterior ring of a footprint is used to seed a building's starting box
+  (you can still shape the box's own vertices freely afterward).
+- **Vertex editing only moves existing vertices (Stage 1 of 3) -- no
+  adding/removing vertices, and no splitting or extruding faces yet.**
+  Every building's mesh keeps the topology it was seeded with (an
+  N-sided flat box, one wall quad per footprint edge, one roof face, one
+  ground face); you can push and pull any of its vertices anywhere in 3D
+  (including moving a footprint corner, since walls/roof/ground share
+  vertices at the seams), but you can't yet add a ridge point, split a
+  roof face into two pitches, or extrude a dormer -- see "Roadmap".
+- **`model/roofshapes.py`'s parametric roof generators (flat/shed/gable/
+  hip/pyramid) are no longer wired into the app** -- they're dormant,
+  still-tested pure-geometry code, kept in case they're useful again
+  later (e.g. as one-click starting shapes) rather than deleted outright.
+  `model/mesh.py`'s `seed_flat_box` is the only shape generator the live
+  app actually uses now.
 - **BGT** context-layer fetching (`data/bgt_client.py`) is implemented
   but not yet wired into the viewer as a rendered layer.
 - **Point cloud rendering is decimated** to a fixed cap (200,000 points,
@@ -159,15 +163,37 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
   still fails with a certificate error, point the `REQUESTS_CA_BUNDLE` (or
   `SSL_CERT_FILE`) environment variable at your organization's root CA
   certificate -- don't disable certificate verification.
+- **Session format is versioned and not backward-compatible.** Moving
+  from the roof-type/height model to an editable mesh (`geometry`
+  replacing `roof` in the session JSON) bumped `SESSION_FORMAT_VERSION`
+  to 2; a session saved (or autosaved) by an older version of this app
+  fails to load with a clear "unsupported session format version" error
+  (autosave specifically just starts empty rather than crashing) instead
+  of being silently misinterpreted. There's no migration path -- reload
+  the area and re-shape the buildings.
+- **No undo/redo** for vertex edits yet.
 
 ## Roadmap
 
+Vertex editing (drag/select/snap-to-LiDAR, current) is Stage 1 of a
+three-stage plan for full freeform 3D control, deliberately shipped in
+order of engineering risk rather than all at once:
+
+- **Stage 2**: topology editing -- add a vertex (split an edge/face),
+  delete a vertex (patch the resulting hole).
+- **Stage 3**: split one face into two (e.g. break a roof plane into two
+  pitches), and extrude a face outward (e.g. add a dormer or bay).
+
+Other planned/deferred items:
 - **Automatic LOD2.2 reconstruction** from LiDAR (RANSAC roof-plane
   fitting, or wrapping the [`roofer`](https://github.com/3DBAG/roofer)
-  engine that powers 3DBAG) as an alternative to manually picking a roof
-  shape -- deliberately postponed for this first build.
+  engine that powers 3DBAG) as an alternative to manual shaping --
+  deliberately postponed; LiDAR is currently only an explicit per-vertex
+  snap target, never fit automatically.
 - Rendering BGT context layers (roads, water, terrain) in the viewer.
-- Straight-skeleton-based roofs for non-rectangular footprints.
+- Live drag feedback for X/Y (not just the vertical Z-drag), and a proper
+  3D transform gizmo if the simple vertical-drag interaction proves too
+  limiting in practice.
 
 ## Project layout
 
@@ -177,20 +203,22 @@ src/building_modeller/
   data/
     bag_client.py           # PDOK BAG WFS fetch
     bgt_client.py           # PDOK BGT WFS fetch (context, not yet wired into the viewer)
-    pointcloud.py           # LAZ/LAS loading, cropping, height stats
+    pointcloud.py           # LAZ/LAS loading, cropping, height stats, per-point LiDAR snap
   model/
-    building.py             # Building dataclass
-    roofshapes.py           # parametric roof generators (flat/shed/gable/hip/pyramid)
+    building.py             # Building dataclass: footprint + editable geometry
+    mesh.py                 # EditableMesh (indexed vertices/faces) + seed_flat_box
+    roofshapes.py           # dormant: parametric roof generators, not wired into the app (see limitations)
     project.py              # session (de)serialization, file- and payload-based
   export/
     citygml_writer.py       # CityGML 2.0 LOD2.2 writer
   web/
     server.py               # Flask app + REST API (create_app())
-    meshutil.py             # BuildingMesh -> flat triangle arrays for Three.js
+    meshutil.py             # EditableMesh -> Three.js render data (vertices/triangles/faces)
+    autosave.py             # best-effort background session persistence
     static/
       index.html
       css/app.css
-      js/app.js              # Three.js scene + API calls
+      js/app.js              # Three.js scene, vertex picking/dragging, API calls
       vendor/                 # vendored three.min.js + OrbitControls.js (no CDN dependency)
 tests/
 ```
@@ -202,8 +230,9 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The suite covers roof geometry, the CityGML writer, LiDAR height stats,
-session (de)serialization, the BAG/BGT WFS fetch logic (`requests.get` is
+The suite covers the editable mesh model, roof geometry (dormant code),
+the CityGML writer, LiDAR height stats and per-vertex snapping, session
+(de)serialization, the BAG/BGT WFS fetch logic (`requests.get` is
 mocked), and the Flask REST API (via Flask's test client -- `/api/area`'s
 BAG fetch is monkeypatched at the function level rather than hitting the
 network).

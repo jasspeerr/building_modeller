@@ -21,11 +21,13 @@ from ..data.pointcloud import LidarPointCloud, find_tiles, stats_for_footprint
 from ..export.citygml_writer import write_citygml
 from ..model.building import Building, ModellingStatus
 from ..model.project import session_from_payload, session_to_payload
-from ..model.roofshapes import RoofParams, RoofType
 from . import autosave
-from .meshutil import mesh_to_triangles
+from .meshutil import mesh_to_render_data
 
 MAX_VIEWER_POINTS = 200_000
+
+#: Search radius (meters) for "snap selected vertex to LiDAR".
+LIDAR_SNAP_RADIUS = 1.0
 
 
 @dataclass
@@ -46,37 +48,16 @@ def _find_building(bag_id: str) -> Building:
     abort(404, f"unknown building: {bag_id}")
 
 
-def _roof_to_dict(roof: RoofParams) -> dict:
-    if roof is None:
-        return None
-    return {
-        "roof_type": RoofType(roof.roof_type).value,
-        "eave_height": roof.eave_height,
-        "ridge_height": roof.ridge_height,
-        "ridge_along": roof.ridge_along,
-    }
-
-
-def _roof_from_json(data: dict) -> RoofParams:
-    return RoofParams(
-        roof_type=RoofType(data["roof_type"]),
-        eave_height=float(data["eave_height"]),
-        ridge_height=(
-            float(data["ridge_height"]) if data.get("ridge_height") is not None else None
-        ),
-        ridge_along=data.get("ridge_along", "long"),
-    )
-
-
 def _building_summary(building: Building) -> dict:
     ox, oy, _ = state.origin
     ring = list(building.footprint.exterior.coords)[:-1]
+    mesh = building.mesh()
     return {
         "bag_id": building.bag_id,
         "status": building.status.value,
         "ground_height": building.ground_height,
         "lidar_stats": building.lidar_stats,
-        "roof": _roof_to_dict(building.roof),
+        "vertex_count": len(mesh.vertices),
         "footprint": [[x - ox, y - oy] for x, y in ring],
     }
 
@@ -159,6 +140,7 @@ def create_app() -> Flask:
             b.lidar_stats = stats
             if stats:
                 b.ground_height = stats["ground_height"]
+            b.mesh()  # seed the initial flat-box geometry now that heights are known
 
         minx, miny, maxx, maxy = bbox
         origin = ((minx + maxx) / 2.0, (miny + maxy) / 2.0, 0.0)
@@ -191,19 +173,54 @@ def create_app() -> Flask:
     @app.get("/api/buildings/<bag_id>/mesh")
     def get_mesh(bag_id: str):
         building = _find_building(bag_id)
-        vertices, faces = mesh_to_triangles(building.mesh(), state.origin)
-        return jsonify({"vertices": vertices, "faces": faces})
+        return jsonify(mesh_to_render_data(building.mesh(), state.origin))
 
-    @app.post("/api/buildings/<bag_id>/roof")
-    def set_roof(bag_id: str):
+    @app.post("/api/buildings/<bag_id>/vertex/<int:index>")
+    def move_vertex(bag_id: str, index: int):
         building = _find_building(bag_id)
         data = request.get_json(force=True)
+        ox, oy, oz = state.origin
+        try:
+            position = (
+                float(data["x"]) + ox,
+                float(data["y"]) + oy,
+                float(data["z"]) + oz,
+            )
+        except (KeyError, TypeError, ValueError):
+            abort(400, "expected numeric x, y, z")
+
         with state_lock:
-            building.set_roof(_roof_from_json(data))
-            vertices, faces = mesh_to_triangles(building.mesh(), state.origin)
+            try:
+                building.move_vertex(index, position)
+            except IndexError as exc:
+                abort(404, str(exc))
         autosave.save(state.buildings)
         return jsonify(
-            {"building": _building_summary(building), "mesh": {"vertices": vertices, "faces": faces}}
+            {"building": _building_summary(building), "mesh": mesh_to_render_data(building.mesh(), state.origin)}
+        )
+
+    @app.post("/api/buildings/<bag_id>/vertex/<int:index>/snap_lidar")
+    def snap_vertex_to_lidar(bag_id: str, index: int):
+        building = _find_building(bag_id)
+        mesh = building.mesh()
+        if not (0 <= index < len(mesh.vertices)):
+            abort(404, f"vertex index {index} out of range")
+
+        x, y, _z = mesh.vertices[index]
+        hit = state.lidar_cloud.height_near(x, y, radius=LIDAR_SNAP_RADIUS)
+        if hit is None:
+            abort(404, "no LiDAR points found near this vertex")
+
+        with state_lock:
+            building.move_vertex(index, (x, y, hit["z"]))
+        autosave.save(state.buildings)
+        return jsonify(
+            {
+                "building": _building_summary(building),
+                "mesh": mesh_to_render_data(building.mesh(), state.origin),
+                "snapped_z": hit["z"],
+                "point_count": hit["point_count"],
+            }
         )
 
     @app.get("/api/pointcloud")

@@ -63,3 +63,20 @@ class TestCropToBbox:
         assert len(cropped) == 1500
         assert cropped.x.max() <= 10.0
         assert cropped.y.max() <= 10.0
+
+
+class TestHeightNear:
+    def test_returns_median_z_of_nearby_points(self):
+        cloud = make_synthetic_cloud()
+        # Deep inside the "roof" patch (2..8, 2..8), away from ground points.
+        result = cloud.height_near(5.0, 5.0, radius=1.0)
+        assert result is not None
+        assert result["z"] == pytest.approx(6.0, abs=0.3)
+        assert result["point_count"] > 0
+
+    def test_returns_none_when_nothing_within_radius(self):
+        cloud = make_synthetic_cloud()
+        assert cloud.height_near(500.0, 500.0, radius=1.0) is None
+
+    def test_returns_none_for_empty_cloud(self):
+        assert LidarPointCloud.empty().height_near(0.0, 0.0) is None

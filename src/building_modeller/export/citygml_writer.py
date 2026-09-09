@@ -8,10 +8,9 @@ same polygon geometries by ``xlink:href`` (the standard CityGML way to
 avoid duplicating coordinates between the semantic surfaces and the
 solid shell).
 
-Buildings without a manually chosen roof are exported as a flat-topped
+Buildings that were never touched are exported as their seeded flat-topped
 box (see ``Building.mesh``) rather than being dropped, so a batch export
-never silently loses a building -- their ``lod`` metadata still records
-that they were not manually modelled.
+never silently loses a building.
 
 No CityGML XML Schema is bundled with this repo (schema files are not
 needed to *produce* well-formed, structurally correct CityGML, and
@@ -28,7 +27,9 @@ from typing import Iterable, List
 from lxml import etree
 
 from ..model.building import Building, ModellingStatus
-from ..model.roofshapes import Ring3
+from ..model.mesh import EditableMesh, Point3
+
+Ring3 = List[Point3]
 
 CITYGML_NS = "http://www.opengis.net/citygml/2.0"
 GML_NS = "http://www.opengis.net/gml"
@@ -62,6 +63,10 @@ def _safe_id(prefix: str, raw: str) -> str:
     """Turn an arbitrary BAG id into a valid GML/XML NCName."""
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", str(raw))
     return f"{prefix}_{cleaned}"
+
+
+def _face_ring(mesh: EditableMesh, face) -> Ring3:
+    return [mesh.vertices[i] for i in face.vertex_indices]
 
 
 def _poslist_text(ring: Ring3) -> str:
@@ -106,20 +111,21 @@ def _building_element(building: Building, srs_name: str) -> etree._Element:
     name_el = etree.SubElement(bldg_el, _q(GML_NS, "name"))
     name_el.text = str(building.bag_id)
 
-    top = max((z for ring in mesh.walls + mesh.roof for _, _, z in ring), default=building.ground_height)
+    top = max((v[2] for v in mesh.vertices), default=building.ground_height)
     height_el = etree.SubElement(bldg_el, _q(BLDG_NS, "measuredHeight"))
     height_el.set("uom", "m")
     height_el.text = f"{max(top - building.ground_height, 0.0):.3f}"
 
     all_poly_ids: List[str] = []
     surfaces = [
-        ("GroundSurface", mesh.ground, f"{gml_id}_gnd"),
-        ("WallSurface", mesh.walls, f"{gml_id}_wall"),
-        ("RoofSurface", mesh.roof, f"{gml_id}_roof"),
+        ("GroundSurface", mesh.faces_by_type("ground"), f"{gml_id}_gnd"),
+        ("WallSurface", mesh.faces_by_type("wall"), f"{gml_id}_wall"),
+        ("RoofSurface", mesh.faces_by_type("roof"), f"{gml_id}_roof"),
     ]
-    for tag, rings, prefix in surfaces:
-        if not rings:
+    for tag, faces, prefix in surfaces:
+        if not faces:
             continue
+        rings = [_face_ring(mesh, f) for f in faces]
         surface_el, poly_ids = _boundary_surface(tag, rings, prefix, srs_name)
         bounded_by = etree.SubElement(bldg_el, _q(BLDG_NS, "boundedBy"))
         bounded_by.append(surface_el)
@@ -140,12 +146,10 @@ def _building_element(building: Building, srs_name: str) -> etree._Element:
 def _envelope(buildings: Iterable[Building], srs_name: str) -> etree._Element:
     xs, ys, zs = [], [], []
     for b in buildings:
-        mesh = b.mesh()
-        for ring in mesh.ground + mesh.walls + mesh.roof:
-            for x, y, z in ring:
-                xs.append(x)
-                ys.append(y)
-                zs.append(z)
+        for x, y, z in b.mesh().vertices:
+            xs.append(x)
+            ys.append(y)
+            zs.append(z)
     envelope = etree.Element(_q(GML_NS, "Envelope"))
     envelope.set("srsName", srs_name)
     envelope.set("srsDimension", "3")

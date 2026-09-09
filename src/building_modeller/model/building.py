@@ -2,53 +2,44 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from shapely.geometry import Polygon
 
-from .roofshapes import BuildingMesh, RoofParams, RoofType, generate_mesh
+from .mesh import EditableMesh, Point3, seed_flat_box
 
 
 class ModellingStatus(str, enum.Enum):
-    UNMODELLED = "unmodelled"  # only a footprint, no roof chosen yet
-    EDITED = "edited"  # user has picked/adjusted a roof
+    UNMODELLED = "unmodelled"  # still the seeded flat box, never edited
+    EDITED = "edited"  # user has moved at least one vertex
     EXPORTED = "exported"  # included in the last export
 
 
 @dataclass
 class Building:
-    """One building: a BAG footprint plus (optionally) a manually chosen
-    LOD2.2 roof shape informed by LiDAR height statistics."""
+    """One building: a BAG footprint plus an editable 3D mesh, seeded as
+    a flat box and shaped by moving vertices (no roof-type picker --
+    see model.mesh)."""
 
     bag_id: str
-    footprint: Polygon  # EPSG:28992 (RD New)
+    footprint: Polygon  # EPSG:28992 (RD New) -- the original BAG outline,
+    # kept for area queries/LiDAR stats even after the mesh is edited.
     ground_height: float = 0.0  # absolute Z, e.g. from AHN6 5th percentile
-    roof: Optional[RoofParams] = None
+    geometry: Optional[EditableMesh] = None
     status: ModellingStatus = ModellingStatus.UNMODELLED
     lidar_stats: Optional[dict] = None  # see data.pointcloud.stats_for_footprint
 
-    def set_roof(self, roof: RoofParams) -> None:
-        self.roof = roof
+    def mesh(self) -> EditableMesh:
+        """The building's actual, persistent 3D geometry, seeding it from
+        the footprint on first access."""
+        if self.geometry is None:
+            self.geometry = seed_flat_box(self.footprint, self.ground_height, self._fallback_height())
+        return self.geometry
+
+    def move_vertex(self, index: int, position: Point3) -> None:
+        self.mesh().move_vertex(index, position)
         self.status = ModellingStatus.EDITED
-
-    def mesh(self) -> BuildingMesh:
-        """Build the wall/roof/ground surfaces for export or preview.
-
-        Unmodelled buildings fall back to a flat LOD1-style box at the
-        LiDAR-derived (or default) top height, so a batch export never
-        silently drops a building the user hasn't gotten to yet.
-        """
-        if self.roof is not None:
-            return generate_mesh(self.footprint, self.ground_height, self.roof)
-        fallback_height = self._fallback_height()
-        fallback_roof = RoofParams(roof_type=RoofType.FLAT, eave_height=fallback_height)
-        return generate_mesh(self.footprint, self.ground_height, fallback_roof)
-
-    def effective_lod(self) -> str:
-        if self.roof is None:
-            return "1.2"
-        return "1.2" if self.roof.roof_type == RoofType.FLAT else "2.2"
 
     def _fallback_height(self) -> float:
         if self.lidar_stats and "top_height" in self.lidar_stats:

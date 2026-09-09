@@ -3,20 +3,25 @@ JSON, so a batch can be worked on across multiple runs of the app before
 export. ``session_to_payload``/``session_from_payload`` work with plain
 dicts so the web API can serve/accept a session without going through a
 file on the server's disk; ``save_session``/``load_session`` are thin
-file-based wrappers around them."""
+file-based wrappers around them.
+
+Bumping ``SESSION_FORMAT_VERSION`` is deliberate: a session saved under an
+older format (e.g. the old roof-type/height model, before geometry became
+a directly editable mesh) fails to load with a clear error rather than
+silently misinterpreting its fields -- see ``session_from_payload``.
+"""
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 from typing import List
 
 from shapely.geometry import mapping, shape
 
 from .building import Building, ModellingStatus
-from .roofshapes import RoofParams, RoofType
+from .mesh import mesh_from_payload, mesh_to_payload
 
-SESSION_FORMAT_VERSION = 1
+SESSION_FORMAT_VERSION = 2
 
 
 def _building_to_dict(building: Building) -> dict:
@@ -24,23 +29,19 @@ def _building_to_dict(building: Building) -> dict:
         "bag_id": building.bag_id,
         "footprint": mapping(building.footprint),
         "ground_height": building.ground_height,
-        "roof": asdict(building.roof) if building.roof else None,
+        "geometry": mesh_to_payload(building.geometry) if building.geometry else None,
         "status": building.status.value,
         "lidar_stats": building.lidar_stats,
     }
 
 
 def _building_from_dict(data: dict) -> Building:
-    roof = None
-    if data.get("roof"):
-        roof_data = dict(data["roof"])
-        roof_data["roof_type"] = RoofType(roof_data["roof_type"])
-        roof = RoofParams(**roof_data)
+    geometry = mesh_from_payload(data["geometry"]) if data.get("geometry") else None
     return Building(
         bag_id=data["bag_id"],
         footprint=shape(data["footprint"]),
         ground_height=data.get("ground_height", 0.0),
-        roof=roof,
+        geometry=geometry,
         status=ModellingStatus(data.get("status", ModellingStatus.UNMODELLED.value)),
         lidar_stats=data.get("lidar_stats"),
     )

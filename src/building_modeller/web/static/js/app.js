@@ -1,5 +1,11 @@
 /* Building Modeller frontend: talks to the Flask REST API and renders
- * footprints / LiDAR point cloud / the live building mesh with Three.js.
+ * footprints / LiDAR point cloud / the live, directly-editable building
+ * mesh with Three.js.
+ *
+ * There is no roof-type picker: every building starts as a flat box and
+ * is shaped by selecting and moving individual vertices (click to select,
+ * click-and-drag vertically to push/pull, or type exact coordinates) --
+ * see model/mesh.py for why.
  *
  * All coordinates coming from the API are already relative to the
  * server-side scene origin (see meshutil.py) -- this file never has to
@@ -18,15 +24,18 @@
     warnings: document.getElementById("warnings"),
     buildingList: document.getElementById("building-list"),
     viewportHint: document.getElementById("viewport-hint"),
-    roofForm: document.getElementById("roof-form"),
     buildingPanelEmpty: document.getElementById("building-panel-empty"),
-    roofBagId: document.getElementById("roof-bag-id"),
-    roofLidarStats: document.getElementById("roof-lidar-stats"),
-    roofType: document.getElementById("roof-type"),
-    roofRidgeAlong: document.getElementById("roof-ridge-along"),
-    roofEave: document.getElementById("roof-eave"),
-    roofRidge: document.getElementById("roof-ridge"),
-    btnLidarSuggest: document.getElementById("btn-lidar-suggest"),
+    buildingInfo: document.getElementById("building-info"),
+    infoBagId: document.getElementById("info-bag-id"),
+    infoLidarStats: document.getElementById("info-lidar-stats"),
+    vertexPanelEmpty: document.getElementById("vertex-panel-empty"),
+    vertexForm: document.getElementById("vertex-form"),
+    vertexIndex: document.getElementById("vertex-index"),
+    vertexSurface: document.getElementById("vertex-surface"),
+    vertexX: document.getElementById("vertex-x"),
+    vertexY: document.getElementById("vertex-y"),
+    vertexZ: document.getElementById("vertex-z"),
+    btnSnapLidar: document.getElementById("btn-snap-lidar"),
     btnSaveSession: document.getElementById("btn-save-session"),
     btnLoadSession: document.getElementById("btn-load-session"),
     loadSessionFile: document.getElementById("load-session-file"),
@@ -36,6 +45,8 @@
   const state = {
     buildings: [],
     selectedBagId: null,
+    meshData: null, // last-fetched {vertices, triangles, faces} for the selected building
+    selectedVertexIndex: null,
     updatingPanel: false,
   };
 
@@ -51,7 +62,7 @@
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(body || {}),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
@@ -101,6 +112,12 @@
   scene.add(footprintGroup);
   let pointCloudObject = null;
   let buildingMeshObject = null;
+  let vertexMarkerGroup = new THREE.Group();
+  scene.add(vertexMarkerGroup);
+
+  const VERTEX_COLOR = 0xffe066;
+  const VERTEX_SELECTED_COLOR = 0x33e0ff;
+  const vertexGeometry = new THREE.SphereGeometry(0.25, 10, 8);
 
   function resizeRenderer() {
     const w = canvas.clientWidth;
@@ -198,7 +215,7 @@
       "position",
       new THREE.BufferAttribute(new Float32Array(meshData.vertices), 3)
     );
-    geometry.setIndex(meshData.faces);
+    geometry.setIndex(meshData.triangles);
     geometry.computeVertexNormals();
     const material = new THREE.MeshStandardMaterial({
       color: 0xd9522e,
@@ -207,6 +224,37 @@
     });
     buildingMeshObject = new THREE.Mesh(geometry, material);
     scene.add(buildingMeshObject);
+  }
+
+  function clearVertexMarkers() {
+    scene.remove(vertexMarkerGroup);
+    vertexMarkerGroup = new THREE.Group();
+    scene.add(vertexMarkerGroup);
+  }
+
+  function renderVertexMarkers(meshData) {
+    clearVertexMarkers();
+    if (!meshData) return;
+    const n = meshData.vertices.length / 3;
+    for (let i = 0; i < n; i++) {
+      const material = new THREE.MeshBasicMaterial({
+        color: i === state.selectedVertexIndex ? VERTEX_SELECTED_COLOR : VERTEX_COLOR,
+      });
+      const marker = new THREE.Mesh(vertexGeometry, material);
+      marker.position.set(
+        meshData.vertices[i * 3],
+        meshData.vertices[i * 3 + 1],
+        meshData.vertices[i * 3 + 2]
+      );
+      marker.userData.vertexIndex = i;
+      vertexMarkerGroup.add(marker);
+    }
+  }
+
+  function setVertexPosition(meshData, index, x, y, z) {
+    meshData.vertices[index * 3] = x;
+    meshData.vertices[index * 3 + 1] = y;
+    meshData.vertices[index * 3 + 2] = z;
   }
 
   // ---- Warnings ----------------------------------------------------------
@@ -229,12 +277,16 @@
     options = options || {};
     state.buildings = buildings;
     state.selectedBagId = null;
+    state.meshData = null;
+    state.selectedVertexIndex = null;
     renderFootprints(state.buildings);
     renderPointCloud(options.pointCloud || { x: [], y: [], z: [] });
     renderBuildingMesh(null);
+    clearVertexMarkers();
     renderBuildingList();
     els.buildingPanelEmpty.hidden = false;
-    els.roofForm.hidden = true;
+    els.buildingInfo.hidden = true;
+    deselectVertex();
     els.viewportHint.textContent = options.hint || "";
   }
 
@@ -259,88 +311,183 @@
 
   async function selectBuilding(bagId) {
     state.selectedBagId = bagId;
+    state.selectedVertexIndex = null;
     renderBuildingList();
     const building = state.buildings.find((b) => b.bag_id === bagId);
     if (!building) return;
-    fillRoofForm(building);
+
+    els.buildingPanelEmpty.hidden = true;
+    els.buildingInfo.hidden = false;
+    els.infoBagId.textContent = building.bag_id;
+    const stats = building.lidar_stats;
+    els.infoLidarStats.textContent = stats
+      ? `${stats.point_count} pts, ground ${stats.ground_height.toFixed(2)} m, top ${stats.top_height.toFixed(2)} m`
+      : "no LiDAR stats";
+
     const meshData = await apiGetJSON(`/api/buildings/${encodeURIComponent(bagId)}/mesh`);
+    state.meshData = meshData;
     renderBuildingMesh(meshData);
+    deselectVertex(); // also renders the (unselected) vertex markers
   }
 
-  function fillRoofForm(building) {
+  // ---- Vertex selection, editing, and dragging ---------------------------
+
+  function surfaceTypesForVertex(meshData, index) {
+    const types = new Set();
+    for (const f of meshData.faces) {
+      if (f.indices.includes(index)) types.add(f.surface_type);
+    }
+    return Array.from(types).join(", ");
+  }
+
+  function selectVertex(index) {
+    state.selectedVertexIndex = index;
+    renderVertexMarkers(state.meshData);
+    fillVertexForm();
+  }
+
+  function deselectVertex() {
+    state.selectedVertexIndex = null;
+    els.vertexPanelEmpty.hidden = false;
+    els.vertexForm.hidden = true;
+    if (state.meshData) renderVertexMarkers(state.meshData);
+  }
+
+  function fillVertexForm() {
+    if (state.selectedVertexIndex === null || !state.meshData) return;
     state.updatingPanel = true;
     try {
-      els.buildingPanelEmpty.hidden = true;
-      els.roofForm.hidden = false;
-      els.roofBagId.textContent = building.bag_id;
-
-      const stats = building.lidar_stats;
-      els.roofLidarStats.textContent = stats
-        ? `${stats.point_count} pts, ground ${stats.ground_height.toFixed(2)} m, top ${stats.top_height.toFixed(2)} m`
-        : "no LiDAR stats";
-
-      const roof = building.roof;
-      if (roof) {
-        els.roofType.value = roof.roof_type;
-        els.roofRidgeAlong.value = roof.ridge_along;
-        els.roofEave.value = roof.eave_height;
-        els.roofRidge.value = roof.ridge_height != null ? roof.ridge_height : roof.eave_height;
-      } else {
-        const eave = stats ? stats.eave_estimate : building.ground_height + 3.0;
-        const ridge = stats ? stats.ridge_estimate : eave;
-        els.roofType.value = "flat";
-        els.roofRidgeAlong.value = "long";
-        els.roofEave.value = eave.toFixed(2);
-        els.roofRidge.value = ridge.toFixed(2);
-      }
-      updateRoofFieldAvailability();
+      els.vertexPanelEmpty.hidden = true;
+      els.vertexForm.hidden = false;
+      const i = state.selectedVertexIndex;
+      els.vertexIndex.textContent = i;
+      els.vertexSurface.textContent = surfaceTypesForVertex(state.meshData, i);
+      els.vertexX.value = state.meshData.vertices[i * 3].toFixed(2);
+      els.vertexY.value = state.meshData.vertices[i * 3 + 1].toFixed(2);
+      els.vertexZ.value = state.meshData.vertices[i * 3 + 2].toFixed(2);
     } finally {
       state.updatingPanel = false;
     }
   }
 
-  function updateRoofFieldAvailability() {
-    const isFlat = els.roofType.value === "flat";
-    els.roofRidge.disabled = isFlat;
-    // "Ridge along" only applies to gable -- hip now follows the real
-    // footprint and has no single global ridge orientation to pick.
-    els.roofRidgeAlong.disabled = els.roofType.value !== "gable";
+  async function submitVertexForm() {
+    if (state.updatingPanel || state.selectedVertexIndex === null || !state.selectedBagId) return;
+    const x = parseFloat(els.vertexX.value);
+    const y = parseFloat(els.vertexY.value);
+    const z = parseFloat(els.vertexZ.value);
+    await moveSelectedVertex(x, y, z);
   }
 
-  async function submitRoofChange() {
-    if (state.updatingPanel || !state.selectedBagId) return;
-    const roofType = els.roofType.value;
-    const body = {
-      roof_type: roofType,
-      eave_height: parseFloat(els.roofEave.value),
-      ridge_height: roofType === "flat" ? null : parseFloat(els.roofRidge.value),
-      ridge_along: els.roofRidgeAlong.value,
-    };
+  async function moveSelectedVertex(x, y, z) {
+    const bagId = state.selectedBagId;
+    const index = state.selectedVertexIndex;
     const result = await apiPostJSON(
-      `/api/buildings/${encodeURIComponent(state.selectedBagId)}/roof`,
-      body
+      `/api/buildings/${encodeURIComponent(bagId)}/vertex/${index}`,
+      { x, y, z }
     );
-    const idx = state.buildings.findIndex((b) => b.bag_id === state.selectedBagId);
+    applyMeshUpdate(bagId, result);
+  }
+
+  function applyMeshUpdate(bagId, result) {
+    const idx = state.buildings.findIndex((b) => b.bag_id === bagId);
     if (idx >= 0) state.buildings[idx] = result.building;
     renderBuildingList();
+    state.meshData = result.mesh;
     renderBuildingMesh(result.mesh);
+    renderVertexMarkers(result.mesh);
+    fillVertexForm();
   }
 
-  els.roofType.addEventListener("change", () => {
-    updateRoofFieldAvailability();
-    submitRoofChange();
-  });
-  els.roofRidgeAlong.addEventListener("change", submitRoofChange);
-  els.roofEave.addEventListener("change", submitRoofChange);
-  els.roofRidge.addEventListener("change", submitRoofChange);
+  els.vertexX.addEventListener("change", submitVertexForm);
+  els.vertexY.addEventListener("change", submitVertexForm);
+  els.vertexZ.addEventListener("change", submitVertexForm);
 
-  els.btnLidarSuggest.addEventListener("click", () => {
-    const building = state.buildings.find((b) => b.bag_id === state.selectedBagId);
-    if (!building || !building.lidar_stats) return;
-    els.roofEave.value = building.lidar_stats.eave_estimate.toFixed(2);
-    els.roofRidge.value = building.lidar_stats.ridge_estimate.toFixed(2);
-    submitRoofChange();
+  els.btnSnapLidar.addEventListener("click", async () => {
+    if (state.selectedVertexIndex === null || !state.selectedBagId) return;
+    try {
+      const result = await apiPostJSON(
+        `/api/buildings/${encodeURIComponent(state.selectedBagId)}/vertex/${state.selectedVertexIndex}/snap_lidar`
+      );
+      applyMeshUpdate(state.selectedBagId, result);
+      showWarnings([]);
+    } catch (err) {
+      showWarnings([`Snap to LiDAR failed: ${err.message}`]);
+    }
   });
+
+  // ---- Vertex picking + vertical drag on the canvas ----------------------
+
+  const raycaster = new THREE.Raycaster();
+  const pointerNDC = new THREE.Vector2();
+  let dragState = null; // { index, startClientY, startZ, moved }
+  const DRAG_THRESHOLD_PX = 3;
+
+  function pickVertexMarker(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointerNDC, camera);
+    const hits = raycaster.intersectObjects(vertexMarkerGroup.children);
+    return hits.length > 0 ? hits[0].object.userData.vertexIndex : null;
+  }
+
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const index = pickVertexMarker(event.clientX, event.clientY);
+    if (index === null) return;
+    // Disable orbiting immediately -- OrbitControls checks this flag at
+    // the start of its own pointerdown handling on the same canvas, so
+    // this stops it from also starting a camera-rotate on this event.
+    controls.enabled = false;
+    selectVertex(index);
+    dragState = {
+      index,
+      startClientY: event.clientY,
+      startZ: state.meshData.vertices[index * 3 + 2],
+      moved: false,
+    };
+    canvas.setPointerCapture(event.pointerId);
+  });
+
+  canvas.addEventListener("pointermove", (event) => {
+    if (!dragState) return;
+    const deltaY = dragState.startClientY - event.clientY;
+    if (!dragState.moved && Math.abs(deltaY) < DRAG_THRESHOLD_PX) return;
+    dragState.moved = true;
+
+    const distance = camera.position.distanceTo(controls.target);
+    const sensitivity = Math.max(distance * 0.002, 0.005);
+    const newZ = dragState.startZ + deltaY * sensitivity;
+
+    const i = dragState.index;
+    setVertexPosition(state.meshData, i, state.meshData.vertices[i * 3], state.meshData.vertices[i * 3 + 1], newZ);
+    renderBuildingMesh(state.meshData);
+    renderVertexMarkers(state.meshData);
+    if (state.selectedVertexIndex === i) fillVertexForm();
+  });
+
+  async function endDrag(event) {
+    if (!dragState) return;
+    controls.enabled = true;
+    canvas.releasePointerCapture(event.pointerId);
+    const wasDrag = dragState.moved;
+    const index = dragState.index;
+    dragState = null;
+    if (!wasDrag) return; // a plain click just selects, nothing to persist
+    const i = index;
+    try {
+      await moveSelectedVertex(
+        state.meshData.vertices[i * 3],
+        state.meshData.vertices[i * 3 + 1],
+        state.meshData.vertices[i * 3 + 2]
+      );
+    } catch (err) {
+      showWarnings([`Failed to move vertex: ${err.message}`]);
+    }
+  }
+
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
 
   // ---- Area loading -------------------------------------------------
 

@@ -85,6 +85,20 @@ class LidarPointCloud:
         mask = self.mask_in_polygon(polygon)
         return LidarPointCloud(self.x[mask], self.y[mask], self.z[mask])
 
+    def height_near(self, x: float, y: float, radius: float = 1.0) -> Optional[dict]:
+        """The representative ground/roof height right at (x, y), for
+        snapping a single mesh vertex to the point cloud -- the median Z
+        of points within ``radius`` meters, or ``None`` if none are
+        found."""
+        if len(self) == 0:
+            return None
+        dist2 = (self.x - x) ** 2 + (self.y - y) ** 2
+        mask = dist2 <= radius * radius
+        if not mask.any():
+            return None
+        nearby_z = self.z[mask]
+        return {"z": float(np.median(nearby_z)), "point_count": int(mask.sum())}
+
 
 def find_tiles(folder: str, pattern: str = "*.laz") -> List[str]:
     """List candidate AHN6 tile files in a local folder (also matches *.las)."""

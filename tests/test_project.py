@@ -8,12 +8,11 @@ from building_modeller.model.project import (
     session_from_payload,
     session_to_payload,
 )
-from building_modeller.model.roofshapes import RoofParams, RoofType
 
 
 def make_buildings():
     a = Building(bag_id="A", footprint=box(0, 0, 10, 6))
-    a.set_roof(RoofParams(roof_type=RoofType.GABLE, eave_height=3.0, ridge_height=5.0))
+    a.move_vertex(0, (1.0, 2.0, 9.0))  # seeds the mesh and edits it
     b = Building(bag_id="B", footprint=box(20, 0, 28, 8), lidar_stats={"point_count": 5})
     return [a, b]
 
@@ -26,11 +25,10 @@ class TestPayloadRoundTrip:
 
         assert len(restored) == 2
         assert restored[0].bag_id == "A"
-        assert restored[0].roof.roof_type == RoofType.GABLE
-        assert restored[0].roof.ridge_height == 5.0
+        assert restored[0].mesh().vertices[0] == (1.0, 2.0, 9.0)
         assert restored[0].status == ModellingStatus.EDITED
         assert restored[1].lidar_stats == {"point_count": 5}
-        assert restored[1].roof is None
+        assert restored[1].geometry is None  # not yet seeded/touched
 
     def test_footprint_geometry_preserved(self):
         buildings = make_buildings()
@@ -53,4 +51,4 @@ class TestFileRoundTrip:
 
         restored = load_session(str(path))
         assert [b.bag_id for b in restored] == ["A", "B"]
-        assert restored[0].roof.roof_type == RoofType.GABLE
+        assert restored[0].mesh().vertices[0] == (1.0, 2.0, 9.0)

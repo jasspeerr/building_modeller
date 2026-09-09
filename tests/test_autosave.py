@@ -4,12 +4,11 @@ from shapely.geometry import box
 
 import building_modeller.web.autosave as autosave_module
 from building_modeller.model.building import Building
-from building_modeller.model.roofshapes import RoofParams, RoofType
 
 
 def make_buildings():
     b = Building(bag_id="A", footprint=box(0, 0, 10, 6))
-    b.set_roof(RoofParams(roof_type=RoofType.GABLE, eave_height=3.0, ridge_height=5.0))
+    b.move_vertex(0, (1.0, 2.0, 9.0))  # seeds the mesh and edits it
     return [b]
 
 
@@ -23,7 +22,7 @@ class TestSaveLoad:
         restored = autosave_module.load()
         assert len(restored) == 1
         assert restored[0].bag_id == "A"
-        assert restored[0].roof.roof_type == RoofType.GABLE
+        assert restored[0].mesh().vertices[0] == (1.0, 2.0, 9.0)
 
     def test_load_with_no_file_returns_empty_list(self, tmp_path, monkeypatch):
         monkeypatch.setattr(autosave_module, "AUTOSAVE_PATH", tmp_path / "does_not_exist.json")

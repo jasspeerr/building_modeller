@@ -54,27 +54,25 @@
     <section class="panel-box" id="building-panel">
       <h2>Selected building</h2>
       <div id="building-panel-empty">No building selected.</div>
-      <form id="roof-form" hidden>
-        <label>BAG ID <span id="roof-bag-id"></span></label>
-        <div id="roof-lidar-stats" class="hint"></div>
-        <label>Roof type
-          <select id="roof-type">
-            <option value="flat">flat</option>
-            <option value="shed">shed</option>
-            <option value="gable">gable</option>
-            <option value="hip">hip</option>
-            <option value="pyramid">pyramid</option>
-          </select>
-        </label>
-        <label>Ridge along
-          <select id="roof-ridge-along">
-            <option value="long">long</option>
-            <option value="short">short</option>
-          </select>
-        </label>
-        <label>Eave height (m)<input type="number" step="0.1" id="roof-eave"></label>
-        <label>Ridge height (m)<input type="number" step="0.1" id="roof-ridge"></label>
-        <button type="button" id="btn-lidar-suggest">Use LiDAR suggestion</button>
+      <div id="building-info" hidden>
+        <label>BAG ID <span id="info-bag-id"></span></label>
+        <div id="info-lidar-stats" class="hint"></div>
+        <p class="hint">
+          Click a vertex marker to select it, then drag it vertically
+          (click and hold, move up/down) or type exact coordinates below.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel-box" id="vertex-panel">
+      <h2>Selected vertex</h2>
+      <div id="vertex-panel-empty">No vertex selected.</div>
+      <form id="vertex-form" hidden>
+        <label>Index <span id="vertex-index"></span> (<span id="vertex-surface"></span>)</label>
+        <label>X (m)<input type="number" step="0.1" id="vertex-x"></label>
+        <label>Y (m)<input type="number" step="0.1" id="vertex-y"></label>
+        <label>Z (m)<input type="number" step="0.1" id="vertex-z"></label>
+        <button type="button" id="btn-snap-lidar">Snap to LiDAR (Z)</button>
       </form>
     </section>
   </aside>

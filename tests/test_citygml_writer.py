@@ -8,16 +8,20 @@ from building_modeller.export.citygml_writer import (
     write_citygml,
 )
 from building_modeller.model.building import Building
-from building_modeller.model.roofshapes import RoofParams, RoofType
 
 NS = {"gml": GML_NS, "bldg": BLDG_NS, "citygml": CITYGML_NS}
 
 
-def make_building(bag_id="0123456789012345", roof_type=RoofType.GABLE):
+def make_building(bag_id="0123456789012345", shaped=True):
     footprint = box(0.0, 0.0, 10.0, 6.0)
     b = Building(bag_id=bag_id, footprint=footprint, ground_height=0.0)
-    if roof_type is not None:
-        b.set_roof(RoofParams(roof_type=roof_type, eave_height=3.0, ridge_height=5.0))
+    b.mesh()  # seed the flat-box geometry
+    if shaped:
+        # Move one roof vertex up, so this isn't just the flat seed box.
+        roof_face = b.geometry.faces_by_type("roof")[0]
+        idx = roof_face.vertex_indices[0]
+        x, y, z = b.geometry.vertices[idx]
+        b.move_vertex(idx, (x, y, z + 2.0))
     return b
 
 
@@ -41,8 +45,8 @@ class TestBuildingContent:
         members = root.findall("citygml:cityObjectMember", NS)
         assert len(members) == 3
 
-    def test_gable_building_has_semantic_surfaces_and_solid(self):
-        root = etree.fromstring(write_citygml([make_building(roof_type=RoofType.GABLE)]))
+    def test_building_has_semantic_surfaces_and_solid(self):
+        root = etree.fromstring(write_citygml([make_building()]))
         bldg = root.find(".//bldg:Building", NS)
         assert bldg is not None
 
@@ -50,16 +54,16 @@ class TestBuildingContent:
         roofs = bldg.findall("bldg:boundedBy/bldg:RoofSurface", NS)
         grounds = bldg.findall("bldg:boundedBy/bldg:GroundSurface", NS)
         assert len(walls) == 1  # one WallSurface containing 4 wall polygons
-        assert len(roofs) == 1
+        assert len(roofs) == 1  # one RoofSurface containing 1 roof polygon
         assert len(grounds) == 1
 
         wall_polys = walls[0].findall(".//gml:Polygon", NS)
         roof_polys = roofs[0].findall(".//gml:Polygon", NS)
         assert len(wall_polys) == 4
-        assert len(roof_polys) == 2  # gable = 2 roof planes
+        assert len(roof_polys) == 1
 
         solid_refs = bldg.findall(".//bldg:lod2Solid//gml:surfaceMember", NS)
-        assert len(solid_refs) == 4 + 2 + 1  # walls + roof + ground
+        assert len(solid_refs) == 4 + 1 + 1  # walls + roof + ground
 
     def test_solid_references_reuse_boundary_surface_ids(self):
         root = etree.fromstring(write_citygml([make_building()]))
