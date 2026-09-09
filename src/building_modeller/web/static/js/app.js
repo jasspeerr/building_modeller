@@ -42,6 +42,10 @@
     edgeB: document.getElementById("edge-b"),
     edgeNotAdjacent: document.getElementById("edge-not-adjacent"),
     btnSplitEdge: document.getElementById("btn-split-edge"),
+    btnSplitFace: document.getElementById("btn-split-face"),
+    extrudeDistanceLabel: document.getElementById("extrude-distance-label"),
+    extrudeDistance: document.getElementById("extrude-distance"),
+    btnExtrudeFace: document.getElementById("btn-extrude-face"),
     btnSaveSession: document.getElementById("btn-save-session"),
     btnLoadSession: document.getElementById("btn-load-session"),
     loadSessionFile: document.getElementById("load-session-file"),
@@ -375,16 +379,27 @@
     updateEdgePanel();
   }
 
-  function edgeIsAdjacent(meshData, a, b) {
-    for (const f of meshData.faces) {
-      const idx = f.indices;
-      const n = idx.length;
-      for (let i = 0; i < n; i++) {
-        const pair = new Set([idx[i], idx[(i + 1) % n]]);
-        if (pair.has(a) && pair.has(b) && pair.size === 2) return true;
-      }
+  function isAdjacentInFace(idx, a, b) {
+    const n = idx.length;
+    for (let i = 0; i < n; i++) {
+      const pair = new Set([idx[i], idx[(i + 1) % n]]);
+      if (pair.has(a) && pair.has(b) && pair.size === 2) return true;
     }
     return false;
+  }
+
+  function edgeIsAdjacent(meshData, a, b) {
+    return meshData.faces.some((f) => isAdjacentInFace(f.indices, a, b));
+  }
+
+  // The single face (if any) that has both a and b as a *non-adjacent*
+  // diagonal -- mirrors EditableMesh._face_for_diagonal server-side,
+  // used here only to decide which buttons to show.
+  function uniqueDiagonalFace(meshData, a, b) {
+    const candidates = meshData.faces.filter(
+      (f) => f.indices.includes(a) && f.indices.includes(b) && !isAdjacentInFace(f.indices, a, b)
+    );
+    return candidates.length === 1 ? candidates[0] : null;
   }
 
   function updateEdgePanel() {
@@ -397,9 +412,15 @@
     els.edgePanel.hidden = false;
     els.edgeA.textContent = a;
     els.edgeB.textContent = b;
+
     const adjacent = edgeIsAdjacent(state.meshData, a, b);
-    els.edgeNotAdjacent.hidden = adjacent;
+    const diagonalFace = uniqueDiagonalFace(state.meshData, a, b);
+
     els.btnSplitEdge.hidden = !adjacent;
+    els.btnSplitFace.hidden = !diagonalFace;
+    els.extrudeDistanceLabel.hidden = !diagonalFace;
+    els.btnExtrudeFace.hidden = !diagonalFace;
+    els.edgeNotAdjacent.hidden = adjacent || !!diagonalFace;
   }
 
   function fillVertexForm() {
@@ -500,6 +521,48 @@
       showWarnings([]);
     } catch (err) {
       showWarnings([`Failed to split edge: ${err.message}`]);
+    }
+  });
+
+  els.btnSplitFace.addEventListener("click", async () => {
+    const a = state.selectedVertexIndex;
+    const b = state.secondaryVertexIndex;
+    if (a === null || b === null || !state.selectedBagId) return;
+    const bagId = state.selectedBagId;
+    try {
+      const result = await apiPostJSON(`/api/buildings/${encodeURIComponent(bagId)}/face/split`, {
+        index_a: a,
+        index_b: b,
+      });
+      applyMeshUpdate(bagId, result);
+      deselectVertex(); // the diagonal no longer identifies a single face
+      showWarnings([]);
+    } catch (err) {
+      showWarnings([`Failed to split face: ${err.message}`]);
+    }
+  });
+
+  els.btnExtrudeFace.addEventListener("click", async () => {
+    const a = state.selectedVertexIndex;
+    const b = state.secondaryVertexIndex;
+    if (a === null || b === null || !state.selectedBagId) return;
+    const distance = parseFloat(els.extrudeDistance.value);
+    if (!Number.isFinite(distance) || distance === 0) {
+      showWarnings(["Extrude distance must be a non-zero number."]);
+      return;
+    }
+    const bagId = state.selectedBagId;
+    try {
+      const result = await apiPostJSON(`/api/buildings/${encodeURIComponent(bagId)}/face/extrude`, {
+        index_a: a,
+        index_b: b,
+        distance,
+      });
+      applyMeshUpdate(bagId, result);
+      deselectVertex(); // a/b are now skirt-boundary vertices, not a face diagonal
+      showWarnings([]);
+    } catch (err) {
+      showWarnings([`Failed to extrude face: ${err.message}`]);
     }
   });
 

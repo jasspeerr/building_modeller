@@ -156,6 +156,97 @@ class TestDeleteVertex:
             mesh.delete_vertex(999)
 
 
+class TestSplitFace:
+    def test_splits_roof_into_two_pitches_via_two_edge_splits(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof = list(mesh.faces_by_type("roof")[0].vertex_indices)  # [4,5,6,7]
+
+        a = mesh.split_edge(roof[0], roof[1])  # midpoint of one long eave edge
+        b = mesh.split_edge(roof[3], roof[2])  # midpoint of the opposite long eave edge
+
+        f1, f2 = mesh.split_face(a, b)
+        assert f1.surface_type == "roof"
+        assert f2.surface_type == "roof"
+        assert a in f1.vertex_indices and b in f1.vertex_indices
+        assert a in f2.vertex_indices and b in f2.vertex_indices
+        assert len(mesh.faces_by_type("roof")) == 2
+        # Original single roof face is gone, replaced by the two new ones.
+        assert roof not in [f.vertex_indices for f in mesh.faces]
+
+    def test_new_faces_together_cover_the_same_vertices_as_the_original(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof = list(mesh.faces_by_type("roof")[0].vertex_indices)
+        a = mesh.split_edge(roof[0], roof[1])
+        b = mesh.split_edge(roof[3], roof[2])
+        f1, f2 = mesh.split_face(a, b)
+        combined = set(f1.vertex_indices) | set(f2.vertex_indices)
+        assert combined == set(roof) | {a, b}
+
+    def test_raises_for_adjacent_vertices(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof = mesh.faces_by_type("roof")[0].vertex_indices
+        with pytest.raises(ValueError):
+            mesh.split_face(roof[0], roof[1])  # adjacent -- not a diagonal
+
+    def test_raises_when_no_face_has_both_vertices(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        with pytest.raises(ValueError):
+            mesh.split_face(0, 999)
+
+    def test_raises_when_vertices_never_share_a_face(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        # Vertex 0 (a ground corner) and vertex 6 (the diagonally opposite
+        # roof corner) never appear together in any single face at all.
+        with pytest.raises(ValueError):
+            mesh.split_face(0, 6)
+
+
+class TestExtrudeFace:
+    def test_extrudes_along_normal_creating_skirt_and_cap(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof = mesh.faces_by_type("roof")[0]
+        n_faces_before = len(mesh.faces)
+
+        cap = mesh.extrude_face(roof.vertex_indices[0], roof.vertex_indices[2], distance=1.5)
+
+        assert cap.surface_type == "roof"
+        assert all(v[2] == pytest.approx(4.5) for v in [mesh.vertices[i] for i in cap.vertex_indices])
+        # 4 new skirt (wall) faces + 1 cap replacing the original roof face.
+        assert len(mesh.faces) == n_faces_before + 4
+        assert len(mesh.faces_by_type("wall")) == 8  # original 4 + 4 new skirt walls
+
+    def test_original_boundary_vertices_are_unmoved(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof = mesh.faces_by_type("roof")[0]
+        original_positions = [mesh.vertices[i] for i in roof.vertex_indices]
+        mesh.extrude_face(roof.vertex_indices[0], roof.vertex_indices[2], distance=1.5)
+        # The *original* vertex indices (now only part of the skirt walls)
+        # must still be exactly where they started.
+        for i, pos in zip(roof.vertex_indices, original_positions):
+            assert mesh.vertices[i] == pos
+
+    def test_extrude_only_a_split_off_sub_face_leaves_rest_of_roof_alone(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof = list(mesh.faces_by_type("roof")[0].vertex_indices)
+        a = mesh.split_edge(roof[0], roof[1])
+        b = mesh.split_edge(roof[3], roof[0])
+        big, small = mesh.split_face(a, b)
+        if len(big.vertex_indices) < len(small.vertex_indices):
+            big, small = small, big
+
+        cap = mesh.extrude_face(big.vertex_indices[0], big.vertex_indices[2], distance=1.0)
+
+        assert cap.surface_type == "roof"
+        # The untouched small triangular face must stay at the original height.
+        assert all(mesh.vertices[i][2] == pytest.approx(3.0) for i in small.vertex_indices)
+
+    def test_raises_for_adjacent_vertices(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof = mesh.faces_by_type("roof")[0].vertex_indices
+        with pytest.raises(ValueError):
+            mesh.extrude_face(roof[0], roof[1], distance=1.0)
+
+
 class TestPayloadRoundTrip:
     def test_round_trips(self):
         mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)

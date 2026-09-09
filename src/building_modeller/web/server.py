@@ -260,6 +260,47 @@ def create_app() -> Flask:
             }
         )
 
+    @app.post("/api/buildings/<bag_id>/face/split")
+    def split_face(bag_id: str):
+        building = _find_building(bag_id)
+        data = request.get_json(force=True)
+        try:
+            index_a = int(data["index_a"])
+            index_b = int(data["index_b"])
+        except (KeyError, TypeError, ValueError):
+            abort(400, "expected integer index_a, index_b")
+
+        with state_lock:
+            try:
+                building.split_face(index_a, index_b)
+            except (IndexError, ValueError) as exc:
+                abort(400, str(exc))
+        autosave.save(state.buildings)
+        return jsonify(
+            {"building": _building_summary(building), "mesh": mesh_to_render_data(building.mesh(), state.origin)}
+        )
+
+    @app.post("/api/buildings/<bag_id>/face/extrude")
+    def extrude_face(bag_id: str):
+        building = _find_building(bag_id)
+        data = request.get_json(force=True)
+        try:
+            index_a = int(data["index_a"])
+            index_b = int(data["index_b"])
+            distance = float(data["distance"])
+        except (KeyError, TypeError, ValueError):
+            abort(400, "expected integer index_a, index_b and numeric distance")
+
+        with state_lock:
+            try:
+                building.extrude_face(index_a, index_b, distance)
+            except (IndexError, ValueError) as exc:
+                abort(400, str(exc))
+        autosave.save(state.buildings)
+        return jsonify(
+            {"building": _building_summary(building), "mesh": mesh_to_render_data(building.mesh(), state.origin)}
+        )
+
     @app.get("/api/pointcloud")
     def get_point_cloud():
         return jsonify(_point_cloud_payload(state.lidar_cloud, state.origin))

@@ -99,13 +99,21 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
    the vertices that make them up:
    - **Delete vertex** removes the selected vertex from every face it's
      part of (a face that would collapse below 3 points is dropped).
-   - **Shift+click a second vertex** to select the edge between them (if
-     they're directly connected in some face, shown in the new "Selected
-     edge" panel) and **Split edge** to insert a new vertex at its
-     midpoint -- e.g. split both long edges of a roof face at their
-     midpoints, then drag each new midpoint up to start forming a ridge.
-   - Extruding a face outward (e.g. a dormer) is a planned follow-up --
-     see "Roadmap".
+   - **Shift+click a second vertex** to select a pair, shown in the
+     "Selected pair" panel, offering whichever of these applies:
+     - **Split edge** (if the two are directly connected by an edge) --
+       inserts a new vertex at its midpoint, e.g. split both long edges
+       of a roof face at their midpoints, then drag each new midpoint up
+       to form a ridge.
+     - **Split face into two** (if the two share a face as a diagonal,
+       not an edge) -- e.g. split a roof plane into two separate
+       pitches along that diagonal, ready to angle independently.
+     - **Extrude face** (same diagonal-sharing condition, with a
+       distance field) -- pushes that face outward along its own normal,
+       connecting the original boundary to the new position with fresh
+       wall faces. Combine with the above to carve out and pop up a
+       dormer: split off a small sub-region of the roof, then extrude
+       just that piece.
 4. Repeat for the buildings you care about. Buildings you never touch stay
    as their seeded flat box, so a batch export never silently drops one --
    check the status tag (`unmodelled` / `edited` / `exported`) in the list
@@ -131,20 +139,23 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
 - **Footprint holes** (courtyard buildings) are not supported -- only the
   exterior ring of a footprint is used to seed a building's starting box
   (you can still shape the box's own vertices freely afterward).
-- **No face splitting or extrusion yet (Stages 1-2 of 3 shipped, Stage 3
-  pending).** You can move any vertex freely and now add one (split an
-  edge in two) or remove one (patch the faces that referenced it), but
-  you can't yet split a whole roof face into two separate pitches in one
-  step, or extrude a face outward into a dormer/bay -- see "Roadmap".
-  (A ridge can still be built today with two edge-splits plus two drags,
-  it just takes a few steps rather than one.)
-- **Edge splitting only inserts a straight midpoint, and deleting a
-  vertex naively reconnects its former neighbors** -- for convex-ish
-  faces (true of everything the seeded flat box produces) this always
-  gives a sane, simple polygon; heavily reshaped, concave, or
-  self-intersecting faces from many edits could in principle produce an
-  unusual-looking face this way. There's no validation guarding against
-  it -- the tool trusts you.
+- **Face split/extrude both require a *non-adjacent* vertex pair to
+  identify the face** (a "diagonal" -- two of its vertices that aren't
+  directly connected by an edge). This is deliberate, not an
+  oversight: an actual edge is normally shared by two faces (e.g. a
+  roof's eave edge also belongs to the wall below it), so picking an
+  edge wouldn't tell the tool *which* of the two faces you mean --
+  a diagonal only ever belongs to one. If your two selected vertices are
+  adjacent, or belong to more than one face together, split/extrude
+  won't be offered; pick two corners that skip at least one vertex
+  between them along the face you want.
+- **Edge/face splitting only inserts straight midpoints/diagonals, and
+  deleting a vertex naively reconnects its former neighbors** -- for
+  convex-ish faces (true of everything the seeded flat box, plus any
+  split/extrude of it, produces) this always gives a sane, simple
+  polygon; heavily reshaped, concave, or self-intersecting faces from
+  many edits could in principle produce an unusual-looking face this
+  way. There's no validation guarding against it -- the tool trusts you.
 - **`model/roofshapes.py`'s parametric roof generators (flat/shed/gable/
   hip/pyramid) are no longer wired into the app** -- they're dormant,
   still-tested pure-geometry code, kept in case they're useful again
@@ -189,19 +200,22 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
 
 ## Roadmap
 
-Freeform editing is being built in three stages of increasing engineering
-risk rather than all at once. Done so far:
+Freeform editing was built in three stages of increasing engineering risk
+rather than all at once -- all three are done:
 
 - ~~**Stage 1**: select/drag any vertex, edit its X/Y/Z directly, snap it
   to LiDAR.~~
 - ~~**Stage 2**: add a vertex (split an edge, shared correctly across
   every face that has it), delete a vertex (patch the faces it was
   part of).~~
+- ~~**Stage 3**: split one face into two along a diagonal (e.g. break a
+  roof plane into two separate pitches), and extrude a face outward
+  along its own normal (e.g. add a dormer or bay).~~
 
-Next:
-
-- **Stage 3**: split one face into two (e.g. break a roof plane into two
-  pitches), and extrude a face outward (e.g. add a dormer or bay).
+Not yet planned in detail, but natural next steps if you want to keep
+going: undo/redo, arbitrary-direction extrude (currently always along
+the face's own normal), and a more direct way to select a whole face
+than the current "shift+click two non-adjacent corners" scheme.
 
 Other planned/deferred items:
 - **Automatic LOD2.2 reconstruction** from LiDAR (RANSAC roof-plane
@@ -225,7 +239,7 @@ src/building_modeller/
     pointcloud.py           # LAZ/LAS loading, cropping, height stats, per-point LiDAR snap
   model/
     building.py             # Building dataclass: footprint + editable geometry
-    mesh.py                 # EditableMesh (indexed vertices/faces) + seed_flat_box
+    mesh.py                 # EditableMesh: seed_flat_box + move/split/delete/extrude ops
     roofshapes.py           # dormant: parametric roof generators, not wired into the app (see limitations)
     project.py              # session (de)serialization, file- and payload-based
   export/

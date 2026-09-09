@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
+import numpy as np
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
@@ -108,6 +109,101 @@ class EditableMesh:
         del self.vertices[index]
         for face in self.faces:
             face.vertex_indices = [i - 1 if i > index else i for i in face.vertex_indices]
+
+    def _face_for_diagonal(self, index_a: int, index_b: int) -> Face:
+        """The single face that has both vertices as *non-adjacent*
+        members (a diagonal, not an edge) -- this is how ``split_face``
+        and ``extrude_face`` identify "the face" from just two vertex
+        indices, reusing the same selection the UI already has for
+        ``split_edge``. Non-adjacency matters: an actual edge is normally
+        shared by two faces, which would make "the face" ambiguous; a
+        diagonal only ever belongs to at most one."""
+        candidates = []
+        for face in self.faces:
+            idx = face.vertex_indices
+            if index_a not in idx or index_b not in idx:
+                continue
+            n = len(idx)
+            adjacent = any(
+                {idx[i], idx[(i + 1) % n]} == {index_a, index_b} for i in range(n)
+            )
+            if not adjacent:
+                candidates.append(face)
+        if not candidates:
+            raise ValueError(
+                f"vertices {index_a} and {index_b} are not a non-adjacent diagonal of any single face"
+            )
+        if len(candidates) > 1:
+            raise ValueError(f"vertices {index_a} and {index_b} are ambiguous -- they span multiple faces")
+        return candidates[0]
+
+    def split_face(self, index_a: int, index_b: int) -> Tuple[Face, Face]:
+        """Split the face that has ``index_a``/``index_b`` as a diagonal
+        into two faces along that diagonal (each keeping the original's
+        surface_type). E.g. split a roof face's two newly-added edge
+        midpoints to turn one flat plane into two separate pitches."""
+        face = self._face_for_diagonal(index_a, index_b)
+        idx = face.vertex_indices
+        pos_a, pos_b = idx.index(index_a), idx.index(index_b)
+
+        if pos_a < pos_b:
+            ring1 = idx[pos_a : pos_b + 1]
+            ring2 = idx[pos_b:] + idx[: pos_a + 1]
+        else:
+            ring1 = idx[pos_a:] + idx[: pos_b + 1]
+            ring2 = idx[pos_b : pos_a + 1]
+
+        new_faces = (
+            Face(vertex_indices=ring1, surface_type=face.surface_type),
+            Face(vertex_indices=ring2, surface_type=face.surface_type),
+        )
+        face_pos = self.faces.index(face)
+        self.faces[face_pos : face_pos + 1] = list(new_faces)
+        return new_faces
+
+    def extrude_face(self, index_a: int, index_b: int, distance: float) -> Face:
+        """Push the face identified by the ``index_a``/``index_b``
+        diagonal outward along its own normal by ``distance``, creating a
+        protrusion (e.g. a dormer or bay): the face's vertices are
+        duplicated and offset, new wall-type "skirt" faces connect the
+        original (unmoved, still shared with the surrounding mesh)
+        boundary to the offset copy, and a new cap face -- same
+        surface_type as the original -- sits at the extruded position.
+        Returns the new cap face."""
+        face = self._face_for_diagonal(index_a, index_b)
+        idx = face.vertex_indices
+        if len(idx) < 3:
+            raise ValueError("face has fewer than 3 vertices")
+
+        p0 = np.array(self.vertices[idx[0]])
+        p1 = np.array(self.vertices[idx[1]])
+        p2 = np.array(self.vertices[idx[2]])
+        normal = np.cross(p1 - p0, p2 - p0)
+        norm_len = np.linalg.norm(normal)
+        if norm_len < 1e-9:
+            raise ValueError("face is degenerate (near-collinear points); can't compute a normal")
+        normal = normal / norm_len
+        offset = normal * distance
+
+        new_indices = []
+        for i in idx:
+            new_pos = tuple((np.array(self.vertices[i]) + offset).tolist())
+            new_indices.append(len(self.vertices))
+            self.vertices.append(new_pos)
+
+        n = len(idx)
+        skirt = [
+            Face(
+                vertex_indices=[idx[i], idx[(i + 1) % n], new_indices[(i + 1) % n], new_indices[i]],
+                surface_type="wall",
+            )
+            for i in range(n)
+        ]
+        cap = Face(vertex_indices=new_indices, surface_type=face.surface_type)
+
+        face_pos = self.faces.index(face)
+        self.faces[face_pos : face_pos + 1] = skirt + [cap]
+        return cap
 
 
 def _exterior_ring_ccw(polygon: Polygon) -> List[Tuple[float, float]]:

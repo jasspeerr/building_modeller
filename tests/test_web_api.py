@@ -205,6 +205,85 @@ class TestVertexDelete:
         assert res.status_code == 404
 
 
+class TestFaceSplit:
+    def test_splits_roof_into_two_pitches(self, client):
+        building = Building(bag_id="A", footprint=box(0, 0, 10, 6))
+        server_module.state.buildings = [building]
+        roof = list(building.mesh().faces_by_type("roof")[0].vertex_indices)
+
+        a = client.post("/api/buildings/A/edge/split", json={"index_a": roof[0], "index_b": roof[1]}).get_json()[
+            "new_vertex_index"
+        ]
+        b = client.post("/api/buildings/A/edge/split", json={"index_a": roof[3], "index_b": roof[2]}).get_json()[
+            "new_vertex_index"
+        ]
+
+        res = client.post("/api/buildings/A/face/split", json={"index_a": a, "index_b": b})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["building"]["status"] == "edited"
+        roof_faces = [f for f in data["mesh"]["faces"] if f["surface_type"] == "roof"]
+        assert len(roof_faces) == 2
+
+    def test_split_face_on_adjacent_vertices_400(self, client):
+        building = Building(bag_id="A", footprint=box(0, 0, 10, 6))
+        server_module.state.buildings = [building]
+        roof = building.mesh().faces_by_type("roof")[0].vertex_indices
+        res = client.post("/api/buildings/A/face/split", json={"index_a": roof[0], "index_b": roof[1]})
+        assert res.status_code == 400
+
+    def test_split_face_on_unknown_building_404(self, client):
+        res = client.post("/api/buildings/nope/face/split", json={"index_a": 0, "index_b": 1})
+        assert res.status_code == 404
+
+    def test_split_face_missing_fields_400(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/face/split", json={})
+        assert res.status_code == 400
+
+
+class TestFaceExtrude:
+    def test_extrudes_roof_face(self, client):
+        building = Building(bag_id="A", footprint=box(0, 0, 10, 6))
+        server_module.state.buildings = [building]
+        roof = building.mesh().faces_by_type("roof")[0].vertex_indices
+
+        res = client.post(
+            "/api/buildings/A/face/extrude",
+            json={"index_a": roof[0], "index_b": roof[2], "distance": 1.5},
+        )
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["building"]["status"] == "edited"
+        roof_faces = [f for f in data["mesh"]["faces"] if f["surface_type"] == "roof"]
+        assert len(roof_faces) == 1
+        cap_zs = {
+            round(data["mesh"]["vertices"][i * 3 + 2], 3) for i in roof_faces[0]["indices"]
+        }
+        assert cap_zs == {4.5}
+
+    def test_extrude_on_adjacent_vertices_400(self, client):
+        building = Building(bag_id="A", footprint=box(0, 0, 10, 6))
+        server_module.state.buildings = [building]
+        roof = building.mesh().faces_by_type("roof")[0].vertex_indices
+        res = client.post(
+            "/api/buildings/A/face/extrude",
+            json={"index_a": roof[0], "index_b": roof[1], "distance": 1.0},
+        )
+        assert res.status_code == 400
+
+    def test_extrude_on_unknown_building_404(self, client):
+        res = client.post(
+            "/api/buildings/nope/face/extrude", json={"index_a": 0, "index_b": 1, "distance": 1.0}
+        )
+        assert res.status_code == 404
+
+    def test_extrude_missing_fields_400(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/face/extrude", json={"index_a": 0, "index_b": 2})
+        assert res.status_code == 400
+
+
 class TestSession:
     def test_round_trip_preserves_edited_geometry_and_recomputes_origin(self, client):
         b = Building(bag_id="A", footprint=box(0, 0, 10, 6))

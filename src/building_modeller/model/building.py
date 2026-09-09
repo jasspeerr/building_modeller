@@ -50,6 +50,14 @@ class Building:
         self.mesh().delete_vertex(index)
         self.status = ModellingStatus.EDITED
 
+    def split_face(self, index_a: int, index_b: int) -> None:
+        self.mesh().split_face(index_a, index_b)
+        self.status = ModellingStatus.EDITED
+
+    def extrude_face(self, index_a: int, index_b: int, distance: float) -> None:
+        self.mesh().extrude_face(index_a, index_b, distance)
+        self.status = ModellingStatus.EDITED
+
     def _fallback_height(self) -> float:
         if self.lidar_stats and "top_height" in self.lidar_stats:
             return float(self.lidar_stats["top_height"])

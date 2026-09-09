@@ -60,7 +60,8 @@
         <p class="hint">
           Click a vertex marker to select it, then drag it vertically
           (click and hold, move up/down) or type exact coordinates below.
-          Shift+click a second vertex to select an edge between them.
+          Shift+click a second vertex to select an edge or a face (via its
+          diagonal) between them.
         </p>
       </div>
     </section>
@@ -79,10 +80,15 @@
     </section>
 
     <section class="panel-box" id="edge-panel" hidden>
-      <h2>Selected edge</h2>
+      <h2>Selected pair</h2>
       <div class="hint">Vertex <span id="edge-a"></span> &ndash; vertex <span id="edge-b"></span></div>
-      <div id="edge-not-adjacent" class="hint" hidden>These vertices aren't directly connected by an edge.</div>
+      <div id="edge-not-adjacent" class="hint" hidden>These aren't directly connected by an edge, and don't share a single face as a diagonal.</div>
       <button type="button" id="btn-split-edge" hidden>Split edge (add vertex)</button>
+      <button type="button" id="btn-split-face" hidden>Split face into two (along this diagonal)</button>
+      <label id="extrude-distance-label" hidden>Extrude distance (m)
+        <input type="number" step="0.1" value="1.0" id="extrude-distance">
+      </label>
+      <button type="button" id="btn-extrude-face" hidden>Extrude face</button>
     </section>
   </aside>
 </div>
