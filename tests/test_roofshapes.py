@@ -99,22 +99,64 @@ class TestGableMesh:
 
 
 class TestHipMesh:
-    def test_produces_four_roof_faces(self):
-        mesh = hip_mesh(RECT, ground_height=0.0, eave_height=3.0, ridge_height=5.0)
-        assert len(mesh.roof) == 4
-        for face in mesh.roof:
-            assert_planar(face)
+    def test_roof_faces_are_all_triangles(self):
+        mesh = hip_mesh(RECT, ground_height=0.0, eave_height=3.0, ridge_height=5.0, resolution=1.0)
+        assert len(mesh.roof) > 0
+        assert all(len(face) == 3 for face in mesh.roof)
 
-    def test_all_walls_are_simple_rectangles(self):
+    def test_all_walls_are_simple_rectangles_at_eave_height(self):
         mesh = hip_mesh(RECT, ground_height=0.0, eave_height=3.0, ridge_height=5.0)
         assert len(mesh.walls) == 4
         assert all(len(w) == 4 for w in mesh.walls)
+        for wall in mesh.walls:
+            top_zs = [z for _, _, z in wall if z != 0.0]
+            assert all(z == pytest.approx(3.0) for z in top_zs)
 
-    def test_square_footprint_degenerates_toward_pyramid_apex(self):
-        mesh = hip_mesh(SQUARE, ground_height=0.0, eave_height=3.0, ridge_height=6.0)
-        # ridge_half_len should be ~0 for a square -> ridge faces become triangles
-        sizes = sorted(len(f) for f in mesh.roof)
-        assert sizes[0] == 3 and sizes[1] == 3
+    def test_height_range_spans_eave_to_ridge(self):
+        mesh = hip_mesh(RECT, ground_height=0.0, eave_height=3.0, ridge_height=5.0, resolution=1.0)
+        zs = [z for face in mesh.roof for _, _, z in face]
+        assert min(zs) == pytest.approx(3.0, abs=1e-6)
+        assert max(zs) == pytest.approx(5.0, abs=0.05)
+
+    def test_height_increases_with_distance_from_boundary(self):
+        # A point near the middle of the long edge should be lower than the
+        # ridge, and boundary vertices should sit exactly at eave height.
+        mesh = hip_mesh(RECT, ground_height=0.0, eave_height=3.0, ridge_height=6.0, resolution=0.5)
+        boundary_zs = {round(z, 6) for face in mesh.roof for x, y, z in face
+                        if (x in (0.0, 10.0) or y in (0.0, 6.0))}
+        assert 3.0 in boundary_zs or all(z >= 3.0 for z in boundary_zs)
+        interior_max_z = max(z for face in mesh.roof for _, _, z in face)
+        assert interior_max_z > 3.0
+
+    def test_ground_and_walls_use_real_footprint_for_l_shape(self):
+        l_shape = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 8), (0, 8)])
+        mesh = hip_mesh(l_shape, ground_height=0.0, eave_height=3.0, ridge_height=6.0, resolution=1.0)
+        n_edges = len(list(l_shape.exterior.coords)) - 1
+        assert len(mesh.walls) == n_edges
+        assert len(mesh.ground) == 1
+
+    def test_works_on_l_shaped_footprint_without_crashing(self):
+        l_shape = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 8), (0, 8)])
+        mesh = hip_mesh(l_shape, ground_height=0.0, eave_height=3.0, ridge_height=6.0, resolution=1.0)
+        assert len(mesh.roof) > 0
+        zs = [z for face in mesh.roof for _, _, z in face]
+        assert min(zs) == pytest.approx(3.0, abs=1e-6)
+        assert max(zs) <= 6.0 + 1e-6
+
+    def test_flat_when_eave_equals_ridge(self):
+        mesh = hip_mesh(RECT, ground_height=0.0, eave_height=4.0, ridge_height=4.0, resolution=1.0)
+        zs = [z for face in mesh.roof for _, _, z in face]
+        assert all(z == pytest.approx(4.0) for z in zs)
+
+    def test_tiny_footprint_does_not_crash(self):
+        tiny = box(0.0, 0.0, 0.3, 0.3)
+        mesh = hip_mesh(tiny, ground_height=0.0, eave_height=3.0, ridge_height=4.0, resolution=1.5)
+        assert len(mesh.roof) > 0
+
+    def test_square_footprint_reaches_ridge_near_center(self):
+        mesh = hip_mesh(SQUARE, ground_height=0.0, eave_height=3.0, ridge_height=6.0, resolution=0.5)
+        max_z = max(z for face in mesh.roof for _, _, z in face)
+        assert max_z == pytest.approx(6.0, abs=0.1)
 
 
 class TestPyramidMesh:

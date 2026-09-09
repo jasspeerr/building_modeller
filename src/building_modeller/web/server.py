@@ -22,6 +22,7 @@ from ..export.citygml_writer import write_citygml
 from ..model.building import Building, ModellingStatus
 from ..model.project import session_from_payload, session_to_payload
 from ..model.roofshapes import RoofParams, RoofType
+from . import autosave
 from .meshutil import mesh_to_triangles
 
 MAX_VIEWER_POINTS = 200_000
@@ -80,6 +81,16 @@ def _building_summary(building: Building) -> dict:
     }
 
 
+def _origin_from_buildings(buildings: List[Building]) -> Tuple[float, float, float]:
+    if not buildings:
+        return (0.0, 0.0, 0.0)
+    minx = min(b.footprint.bounds[0] for b in buildings)
+    miny = min(b.footprint.bounds[1] for b in buildings)
+    maxx = max(b.footprint.bounds[2] for b in buildings)
+    maxy = max(b.footprint.bounds[3] for b in buildings)
+    return ((minx + maxx) / 2.0, (miny + maxy) / 2.0, 0.0)
+
+
 def _point_cloud_payload(cloud: LidarPointCloud, origin: Tuple[float, float, float]) -> dict:
     n = len(cloud)
     if n == 0:
@@ -98,6 +109,11 @@ def _point_cloud_payload(cloud: LidarPointCloud, origin: Tuple[float, float, flo
 
 def create_app() -> Flask:
     app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+    restored = autosave.load()
+    if restored:
+        state.buildings = restored
+        state.origin = _origin_from_buildings(restored)
 
     @app.get("/")
     def index():
@@ -151,6 +167,7 @@ def create_app() -> Flask:
             state.buildings = buildings
             state.lidar_cloud = lidar_cloud
             state.origin = origin
+        autosave.save(buildings)
 
         return jsonify(
             {
@@ -184,6 +201,7 @@ def create_app() -> Flask:
         with state_lock:
             building.set_roof(_roof_from_json(data))
             vertices, faces = mesh_to_triangles(building.mesh(), state.origin)
+        autosave.save(state.buildings)
         return jsonify(
             {"building": _building_summary(building), "mesh": {"vertices": vertices, "faces": faces}}
         )
@@ -211,19 +229,13 @@ def create_app() -> Flask:
         except Exception as exc:
             abort(400, f"invalid session file: {exc}")
 
-        if buildings:
-            minx = min(b.footprint.bounds[0] for b in buildings)
-            miny = min(b.footprint.bounds[1] for b in buildings)
-            maxx = max(b.footprint.bounds[2] for b in buildings)
-            maxy = max(b.footprint.bounds[3] for b in buildings)
-            origin = ((minx + maxx) / 2.0, (miny + maxy) / 2.0, 0.0)
-        else:
-            origin = (0.0, 0.0, 0.0)
+        origin = _origin_from_buildings(buildings)
 
         with state_lock:
             state.buildings = buildings
             state.lidar_cloud = LidarPointCloud.empty()
             state.origin = origin
+        autosave.save(buildings)
 
         return jsonify({"origin": list(origin), "buildings": [_building_summary(b) for b in buildings]})
 

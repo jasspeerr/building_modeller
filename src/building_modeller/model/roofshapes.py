@@ -13,11 +13,24 @@ Known MVP simplifications:
 
 * Footprint holes (courtyards) are not supported -- only the exterior
   ring is used.
-* ``gable`` and ``hip`` roofs are built on the footprint's minimum
-  rotated bounding rectangle rather than its exact outline, since a
-  general straight-skeleton roof for arbitrary (e.g. L-shaped) polygons
-  is out of scope for now. ``flat``, ``shed`` and ``pyramid`` are exact
-  for any simple polygon.
+* ``gable`` roofs are built on the footprint's minimum rotated bounding
+  rectangle rather than its exact outline: a gable roof needs a
+  well-defined "which two edges are the gable ends" answer, which has no
+  general solution for an arbitrary polygon without UI to let the user
+  designate them. ``flat``, ``shed``, ``hip`` and ``pyramid`` are all
+  built directly on the real footprint and work on any simple polygon,
+  including concave ones (e.g. L-shaped buildings).
+* ``hip`` roofs are not a true straight skeleton -- computing one exactly
+  requires an event-based algorithm (edge collapses, split events) with
+  no lightweight pure-Python, pip-installable implementation available;
+  the closest option (``polyskel``) isn't on PyPI and is LGPL-licensed,
+  which would mean a git-URL dependency, at odds with this project's
+  wheels-only install story. Instead, ``hip`` height is computed as a
+  function of distance to the nearest footprint edge over a fine Delaunay
+  triangulation of the footprint (see ``_triangulate_polygon``) -- this
+  reduces to the exact classic hip roof for a rectangle and generalizes
+  correctly to concave polygons, at the cost of many small triangular
+  roof facets instead of a handful of large planar ones.
 """
 from __future__ import annotations
 
@@ -27,13 +40,18 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPoint, Point, Polygon
 from shapely.geometry.polygon import orient
+from shapely.ops import triangulate as _shapely_triangulate
 
 Point3 = Tuple[float, float, float]
 Ring3 = List[Point3]
 
 _EPS = 1e-9
+
+#: Grid spacing (meters) used to sample interior points for the hip roof's
+#: triangulated height field -- finer means more, smaller roof facets.
+HIP_ROOF_MESH_RESOLUTION = 1.5
 
 
 class RoofType(str, enum.Enum):
@@ -56,9 +74,10 @@ class RoofParams:
       high edge.
     * ``gable`` / ``hip`` / ``pyramid``: ``eave_height`` is the wall top
       / roof low edge, ``ridge_height`` the ridge/apex height.
-    * ``ridge_along``: for ``gable``/``hip`` only, ``"long"`` (default)
-      or ``"short"`` -- which axis of the bounding rectangle the ridge
-      runs along.
+    * ``ridge_along``: ``gable`` only, ``"long"`` (default) or ``"short"``
+      -- which axis of the bounding rectangle the ridge runs along. Not
+      used by ``hip``, which has no single global ridge orientation once
+      it follows the real (possibly non-rectangular) footprint.
     """
 
     roof_type: RoofType
@@ -267,55 +286,63 @@ def gable_mesh(
     return BuildingMesh(ground=ground, walls=walls, roof=roof)
 
 
+def _sample_interior_grid(polygon: Polygon, resolution: float) -> List[Tuple[float, float]]:
+    """A regular grid of points spaced ``resolution`` apart, strictly
+    inside ``polygon``."""
+    minx, miny, maxx, maxy = polygon.bounds
+    xs = np.arange(minx + resolution / 2.0, maxx, resolution)
+    ys = np.arange(miny + resolution / 2.0, maxy, resolution)
+    points = []
+    for x in xs:
+        for y in ys:
+            if polygon.contains(Point(x, y)):
+                points.append((float(x), float(y)))
+    return points
+
+
+def _triangulate_polygon(polygon: Polygon, resolution: float) -> List[Polygon]:
+    """Delaunay-triangulate ``polygon`` (boundary vertices plus a regular
+    interior grid), keeping only triangles that actually lie inside it --
+    Delaunay triangulation alone would otherwise bridge across concave
+    regions (e.g. an L-shape's notch)."""
+    boundary_pts = _exterior_xy(polygon, ccw=True)
+    interior_pts = _sample_interior_grid(polygon, resolution)
+    points = [Point(x, y) for x, y in boundary_pts + interior_pts]
+    triangles = _shapely_triangulate(MultiPoint(points))
+    return [orient(t, sign=1.0) for t in triangles if polygon.contains(t.centroid)]
+
+
 def hip_mesh(
     polygon: Polygon,
     ground_height: float,
     eave_height: float,
     ridge_height: float,
-    ridge_along: str = "long",
+    resolution: float = HIP_ROOF_MESH_RESOLUTION,
 ) -> BuildingMesh:
-    center, long_dir, short_dir, L, W = _rectangle_axes(polygon)
-    if ridge_along == "short":
-        long_dir, short_dir = short_dir, long_dir
-        L, W = W, L
-    if L < W:
-        L, W = W, L
-        long_dir, short_dir = short_dir, long_dir
-    half_l, half_w = L / 2.0, W / 2.0
-    ridge_half = max(0.0, (L - W) / 2.0)
+    """A hip roof that follows the real footprint (any simple polygon,
+    including concave ones): height increases with distance from the
+    nearest edge, capped at ``ridge_height`` -- see the module docstring
+    for why this is an approximation rather than a true straight
+    skeleton."""
+    ext_up = _exterior_xy(polygon, ccw=True)
+    boundary = polygon.boundary
+    interior_pts = _sample_interior_grid(polygon, resolution)
+    max_inradius = max((Point(x, y).distance(boundary) for x, y in interior_pts), default=0.0)
+    slope = (ridge_height - eave_height) / max(max_inradius, _EPS)
 
-    def xy(u, v):
-        return _xy(u, v, center, long_dir, short_dir)
+    def z_top(x: float, y: float) -> float:
+        d = Point(x, y).distance(boundary)
+        return min(eave_height + slope * d, ridge_height)
 
-    c_nn = xy(-half_l, -half_w)
-    c_pn = xy(half_l, -half_w)
-    c_pp = xy(half_l, half_w)
-    c_np = xy(-half_l, half_w)
-    r0 = xy(-ridge_half, 0.0)
-    r1 = xy(ridge_half, 0.0)
+    walls = _walls_from_ring(ext_up, ground_height, eave_height)
+    ground = [_dedupe_ring(_ground_from_ring(ext_up, ground_height))]
 
-    walls = [
-        _dedupe_ring([(*c_nn, ground_height), (*c_pn, ground_height),
-                      (*c_pn, eave_height), (*c_nn, eave_height)]),
-        _dedupe_ring([(*c_pn, ground_height), (*c_pp, ground_height),
-                      (*c_pp, eave_height), (*c_pn, eave_height)]),
-        _dedupe_ring([(*c_pp, ground_height), (*c_np, ground_height),
-                      (*c_np, eave_height), (*c_pp, eave_height)]),
-        _dedupe_ring([(*c_np, ground_height), (*c_nn, ground_height),
-                      (*c_nn, eave_height), (*c_np, eave_height)]),
-    ]
-    walls = [w for w in walls if len(w) >= 3]
-
-    roof = [
-        _dedupe_ring([(*c_nn, eave_height), (*c_pn, eave_height), (*r1, ridge_height), (*r0, ridge_height)]),
-        _dedupe_ring([(*c_pp, eave_height), (*c_np, eave_height), (*r0, ridge_height), (*r1, ridge_height)]),
-        _dedupe_ring([(*c_nn, eave_height), (*r0, ridge_height), (*c_np, eave_height)]),
-        _dedupe_ring([(*c_pp, eave_height), (*r1, ridge_height), (*c_pn, eave_height)]),
-    ]
-    roof = [r for r in roof if len(r) >= 3]
-
-    ground = [_dedupe_ring([(*c_np, ground_height), (*c_pp, ground_height),
-                             (*c_pn, ground_height), (*c_nn, ground_height)])]
+    roof = []
+    for tri in _triangulate_polygon(polygon, resolution):
+        coords = list(tri.exterior.coords)[:-1]
+        face = _dedupe_ring([(x, y, z_top(x, y)) for x, y in coords])
+        if len(face) >= 3:
+            roof.append(face)
 
     return BuildingMesh(ground=ground, walls=walls, roof=roof)
 
@@ -357,7 +384,7 @@ def generate_mesh(footprint: Polygon, ground_height: float, roof: RoofParams) ->
     if roof.roof_type == RoofType.HIP:
         if roof.ridge_height is None:
             raise ValueError("hip roof requires ridge_height")
-        return hip_mesh(footprint, ground_height, roof.eave_height, roof.ridge_height, roof.ridge_along)
+        return hip_mesh(footprint, ground_height, roof.eave_height, roof.ridge_height)
     if roof.roof_type == RoofType.PYRAMID:
         if roof.ridge_height is None:
             raise ValueError("pyramid roof requires ridge_height")

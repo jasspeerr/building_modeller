@@ -221,6 +221,23 @@
     }
   }
 
+  // ---- Shared "apply a buildings list to the whole UI" ------------------
+  // Used after loading an area, uploading a session, and restoring the
+  // autosaved session on page load.
+
+  function applyBuildingsResult(buildings, options) {
+    options = options || {};
+    state.buildings = buildings;
+    state.selectedBagId = null;
+    renderFootprints(state.buildings);
+    renderPointCloud(options.pointCloud || { x: [], y: [], z: [] });
+    renderBuildingMesh(null);
+    renderBuildingList();
+    els.buildingPanelEmpty.hidden = false;
+    els.roofForm.hidden = true;
+    els.viewportHint.textContent = options.hint || "";
+  }
+
   // ---- Building list -------------------------------------------------
 
   function renderBuildingList() {
@@ -285,8 +302,9 @@
   function updateRoofFieldAvailability() {
     const isFlat = els.roofType.value === "flat";
     els.roofRidge.disabled = isFlat;
-    const isHipOrGable = els.roofType.value === "gable" || els.roofType.value === "hip";
-    els.roofRidgeAlong.disabled = !isHipOrGable;
+    // "Ridge along" only applies to gable -- hip now follows the real
+    // footprint and has no single global ridge orientation to pick.
+    els.roofRidgeAlong.disabled = els.roofType.value !== "gable";
   }
 
   async function submitRoofChange() {
@@ -339,18 +357,11 @@
     els.viewportHint.textContent = "Loading...";
     try {
       const result = await apiPostJSON("/api/area", { bbox, lidar_folder: lidarFolder });
-      state.buildings = result.buildings;
-      state.selectedBagId = null;
+      applyBuildingsResult(result.buildings, {
+        pointCloud: result.point_cloud,
+        hint: result.buildings.length ? "" : "No buildings found for this area.",
+      });
       showWarnings(result.warnings);
-      renderFootprints(state.buildings);
-      renderPointCloud(result.point_cloud);
-      renderBuildingMesh(null);
-      renderBuildingList();
-      els.buildingPanelEmpty.hidden = false;
-      els.roofForm.hidden = true;
-      els.viewportHint.textContent = state.buildings.length
-        ? ""
-        : "No buildings found for this area.";
       if (result.point_cloud.total_points > result.point_cloud.shown_points) {
         showWarnings([
           ...(result.warnings || []),
@@ -385,16 +396,8 @@
       const res = await fetch("/api/session", { method: "POST", body: formData });
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
-      state.buildings = result.buildings;
-      state.selectedBagId = null;
-      renderFootprints(state.buildings);
-      renderPointCloud({ x: [], y: [], z: [] });
-      renderBuildingMesh(null);
-      renderBuildingList();
-      els.buildingPanelEmpty.hidden = false;
-      els.roofForm.hidden = true;
+      applyBuildingsResult(result.buildings);
       showWarnings([]);
-      els.viewportHint.textContent = "";
     } catch (err) {
       showWarnings([`Failed to load session: ${err.message}`]);
     } finally {
@@ -412,4 +415,21 @@
       showWarnings([`Export failed: ${err.message}`]);
     }
   });
+
+  // ---- Restore the autosaved session on page load ------------------
+
+  (async function bootstrap() {
+    try {
+      const result = await apiGetJSON("/api/buildings");
+      if (result.buildings && result.buildings.length > 0) {
+        applyBuildingsResult(result.buildings);
+        showWarnings([
+          `Restored previous session (${result.buildings.length} building(s)). ` +
+            "Reload the area to bring back the LiDAR point cloud.",
+        ]);
+      }
+    } catch (err) {
+      console.warn("Could not restore autosaved session:", err);
+    }
+  })();
 })();

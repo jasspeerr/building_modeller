@@ -14,13 +14,16 @@ import pytest
 from lxml import etree
 from shapely.geometry import box
 
+import building_modeller.web.autosave as autosave_module
 import building_modeller.web.server as server_module
 from building_modeller.model.building import Building
 from building_modeller.web.server import create_app
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    # Never let tests read or write the developer's real autosave file.
+    monkeypatch.setattr(autosave_module, "AUTOSAVE_PATH", tmp_path / "last_session.json")
     app = create_app()
     server_module.state.buildings = []
     server_module.state.lidar_cloud = server_module.LidarPointCloud.empty()
@@ -176,3 +179,44 @@ class TestExport:
 
         listing = client.get("/api/buildings").get_json()
         assert listing["buildings"][0]["status"] == "exported"
+
+
+class TestSessionAutosave:
+    """The background autosave/autoload flow (separate from the explicit
+    download/upload session endpoints in TestSession above)."""
+
+    def test_setting_a_roof_autosaves(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(autosave_module, "AUTOSAVE_PATH", tmp_path / "auto.json")
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+
+        client.post(
+            "/api/buildings/A/roof",
+            json={"roof_type": "flat", "eave_height": 3.0},
+        )
+
+        assert (tmp_path / "auto.json").exists()
+        restored = autosave_module.load()
+        assert restored[0].bag_id == "A"
+        assert restored[0].roof.roof_type.value == "flat"
+
+    def test_new_app_instance_restores_autosaved_state(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(autosave_module, "AUTOSAVE_PATH", tmp_path / "auto.json")
+        b = Building(bag_id="A", footprint=box(0, 0, 10, 6))
+        autosave_module.save([b])
+
+        app = create_app()
+        client = app.test_client()
+        listing = client.get("/api/buildings").get_json()
+        assert len(listing["buildings"]) == 1
+        assert listing["buildings"][0]["bag_id"] == "A"
+
+    def test_fresh_start_with_no_autosave_file_is_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(autosave_module, "AUTOSAVE_PATH", tmp_path / "does_not_exist.json")
+        # create_app() only *overwrites* state.buildings when the autosave
+        # file has something to restore, so start from a known-clean state
+        # rather than relying on test execution order.
+        server_module.state.buildings = []
+        app = create_app()
+        client = app.test_client()
+        listing = client.get("/api/buildings").get_json()
+        assert listing["buildings"] == []

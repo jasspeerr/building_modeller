@@ -95,7 +95,12 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
    `exported`) in the list to see what still needs attention.
 5. **Save session** downloads a JSON file with the batch's modelling
    state; **Load session** re-uploads one to continue later (this does
-   not restore the point cloud view, only footprints/roofs).
+   not restore the point cloud view, only footprints/roofs). This is
+   separate from -- and in addition to -- automatic persistence: the app
+   also autosaves the current batch to `~/.building_modeller/last_session.json`
+   after every area load, roof edit, or session upload, and restores it
+   automatically the next time you open the page or restart the server
+   (again without the point cloud -- reload the area to bring that back).
 6. **Export CityGML** downloads one CityGML 2.0 file for every building
    currently loaded, with `WallSurface`/`RoofSurface`/`GroundSurface`
    semantic surfaces and a `lod2Solid` per building (CRS: EPSG:28992). No
@@ -108,11 +113,26 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
 
 - **Footprint holes** (courtyard buildings) are not supported -- only the
   exterior ring of a footprint is used.
-- **`gable`/`hip` roofs** are built on the footprint's minimum rotated
-  bounding rectangle rather than its exact outline (a general
-  straight-skeleton roof for arbitrary polygons, e.g. L-shaped buildings,
-  is out of scope for now). `flat`, `shed`, and `pyramid` roofs are exact
-  for any simple polygon.
+- **`gable` roofs** are still built on the footprint's minimum rotated
+  bounding rectangle rather than its exact outline -- a gable roof needs a
+  well-defined "which two edges are the gable ends" answer, which has no
+  general solution for an arbitrary polygon without new UI to let the user
+  designate them. `flat`, `shed`, `hip`, and `pyramid` roofs all follow the
+  real footprint and work on any simple polygon, including concave ones
+  (e.g. L-shaped buildings).
+- **`hip` roofs are an approximation, not a true straight skeleton.** Hip
+  roof height is computed from distance to the nearest footprint edge over
+  a fine triangulation of the footprint, rather than a real event-based
+  straight-skeleton algorithm (no lightweight, pip-installable option was
+  available without a git-URL dependency and an LGPL license -- see
+  `model/roofshapes.py`'s module docstring). This is exact for a rectangle
+  and looks correct for typical L-shaped buildings, but produces many
+  small triangular `RoofSurface` polygons per building rather than a
+  handful of large planar ones -- larger or more complex footprints will
+  produce correspondingly larger CityGML exports. The triangulation
+  density is a module-level constant (`HIP_ROOF_MESH_RESOLUTION` in
+  `model/roofshapes.py`, default 1.5m) if you need to trade off detail vs.
+  file size.
 - **BGT** context-layer fetching (`data/bgt_client.py`) is implemented
   but not yet wired into the viewer as a rendered layer.
 - **Point cloud rendering is decimated** to a fixed cap (200,000 points,
