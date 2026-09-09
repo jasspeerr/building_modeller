@@ -27,6 +27,47 @@ error mentioning `libEGL` or similar, ask your system administrator to
 install those (they are small, common libraries used by most GUI
 software, not a modelling-specific dependency).
 
+### Windows: `ImportError: DLL load failed while importing Shiboken`
+
+If you see this (often with a Dutch/localized message like *"Kan opgegeven
+procedure niet vinden"* / "the specified procedure could not be found"),
+it's a version mismatch between the `PySide6` / `PySide6-Essentials` /
+`PySide6-Addons` / `shiboken6` packages -- they're compiled against each
+other and must all be the exact same version. This is most likely if
+you're installing into a shared/global Python environment (e.g. because a
+locked-down machine won't let you create or use a virtual environment)
+rather than a clean venv, since a global `site-packages` can accumulate
+mismatched versions across unrelated installs over time. Work through
+these in order (none of them require a venv):
+
+1. **Check for a mismatch:**
+   ```
+   pip show PySide6 PySide6-Essentials PySide6-Addons shiboken6
+   ```
+   All four must report the same `Version:`. If they don't, that's the bug.
+2. **Force a clean, matched reinstall:**
+   ```
+   pip uninstall -y PySide6 PySide6-Essentials PySide6-Addons shiboken6
+   pip install --no-cache-dir PySide6==6.7.3
+   ```
+   Then re-run step 1 to confirm all four now match.
+3. **Check for a conflicting Qt package** in the same environment (PyQt5,
+   PyQt6, PySide2, or `opencv-python`, which bundles its own Qt on
+   Windows) -- Windows' DLL search order can pick up an incompatible
+   same-named DLL from one of these instead of PySide6's own:
+   ```
+   pip list | findstr /i "qt pyside opencv"
+   ```
+4. **Check the Microsoft Visual C++ Redistributable (x64, 2015-2022) is
+   installed.** `shiboken6`'s native module depends on `VCRUNTIME140.dll`
+   / `VCRUNTIME140_1.dll` / `MSVCP140.dll`; a missing or outdated
+   redistributable produces exactly this "procedure not found" error for
+   compiled Python extensions on Windows. On a managed machine this may
+   need IT's help, since installing it typically needs admin rights.
+5. If none of these fix it, the underlying constraint (no usable venv) is
+   worth raising with IT separately -- a clean virtual environment would
+   sidestep all of the above, but isn't required for the fix itself.
+
 ## Install
 
 ```bash
