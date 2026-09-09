@@ -111,9 +111,25 @@ button.primary {
   color: #fff;
 }
 
+button.danger {
+  background: #fff;
+  border-color: #d9522e;
+  color: #d9522e;
+}
+
+button.danger:hover {
+  background: #d9522e;
+  color: #fff;
+}
+
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+form button {
+  margin-top: 6px;
+  width: 100%;
 }
 
 .hint {

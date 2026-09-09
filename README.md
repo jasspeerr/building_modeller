@@ -95,9 +95,17 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
    vertex's exact X/Y/Z (editable directly) and which surfaces it belongs
    to (wall/roof/ground); **Snap to LiDAR (Z)** sets its height to the
    median of nearby LiDAR points (within 1m) instead of eyeballing it.
-   There's no roof-type picker -- shape roofs, walls, anything, by moving
-   the vertices that make them up (adding/removing vertices, and
-   splitting/extruding faces, are planned follow-ups -- see "Roadmap").
+   There's no roof-type picker -- shape roofs, walls, anything, by editing
+   the vertices that make them up:
+   - **Delete vertex** removes the selected vertex from every face it's
+     part of (a face that would collapse below 3 points is dropped).
+   - **Shift+click a second vertex** to select the edge between them (if
+     they're directly connected in some face, shown in the new "Selected
+     edge" panel) and **Split edge** to insert a new vertex at its
+     midpoint -- e.g. split both long edges of a roof face at their
+     midpoints, then drag each new midpoint up to start forming a ridge.
+   - Extruding a face outward (e.g. a dormer) is a planned follow-up --
+     see "Roadmap".
 4. Repeat for the buildings you care about. Buildings you never touch stay
    as their seeded flat box, so a batch export never silently drops one --
    check the status tag (`unmodelled` / `edited` / `exported`) in the list
@@ -123,14 +131,20 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
 - **Footprint holes** (courtyard buildings) are not supported -- only the
   exterior ring of a footprint is used to seed a building's starting box
   (you can still shape the box's own vertices freely afterward).
-- **Vertex editing only moves existing vertices (Stage 1 of 3) -- no
-  adding/removing vertices, and no splitting or extruding faces yet.**
-  Every building's mesh keeps the topology it was seeded with (an
-  N-sided flat box, one wall quad per footprint edge, one roof face, one
-  ground face); you can push and pull any of its vertices anywhere in 3D
-  (including moving a footprint corner, since walls/roof/ground share
-  vertices at the seams), but you can't yet add a ridge point, split a
-  roof face into two pitches, or extrude a dormer -- see "Roadmap".
+- **No face splitting or extrusion yet (Stages 1-2 of 3 shipped, Stage 3
+  pending).** You can move any vertex freely and now add one (split an
+  edge in two) or remove one (patch the faces that referenced it), but
+  you can't yet split a whole roof face into two separate pitches in one
+  step, or extrude a face outward into a dormer/bay -- see "Roadmap".
+  (A ridge can still be built today with two edge-splits plus two drags,
+  it just takes a few steps rather than one.)
+- **Edge splitting only inserts a straight midpoint, and deleting a
+  vertex naively reconnects its former neighbors** -- for convex-ish
+  faces (true of everything the seeded flat box produces) this always
+  gives a sane, simple polygon; heavily reshaped, concave, or
+  self-intersecting faces from many edits could in principle produce an
+  unusual-looking face this way. There's no validation guarding against
+  it -- the tool trusts you.
 - **`model/roofshapes.py`'s parametric roof generators (flat/shed/gable/
   hip/pyramid) are no longer wired into the app** -- they're dormant,
   still-tested pure-geometry code, kept in case they're useful again
@@ -175,12 +189,17 @@ yourself. Stop the server with Ctrl+C in the terminal it's running in.
 
 ## Roadmap
 
-Vertex editing (drag/select/snap-to-LiDAR, current) is Stage 1 of a
-three-stage plan for full freeform 3D control, deliberately shipped in
-order of engineering risk rather than all at once:
+Freeform editing is being built in three stages of increasing engineering
+risk rather than all at once. Done so far:
 
-- **Stage 2**: topology editing -- add a vertex (split an edge/face),
-  delete a vertex (patch the resulting hole).
+- ~~**Stage 1**: select/drag any vertex, edit its X/Y/Z directly, snap it
+  to LiDAR.~~
+- ~~**Stage 2**: add a vertex (split an edge, shared correctly across
+  every face that has it), delete a vertex (patch the faces it was
+  part of).~~
+
+Next:
+
 - **Stage 3**: split one face into two (e.g. break a roof plane into two
   pitches), and extrude a face outward (e.g. add a dormer or bay).
 

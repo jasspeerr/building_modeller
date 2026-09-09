@@ -41,6 +41,15 @@ class Building:
         self.mesh().move_vertex(index, position)
         self.status = ModellingStatus.EDITED
 
+    def split_edge(self, index_a: int, index_b: int) -> int:
+        new_index = self.mesh().split_edge(index_a, index_b)
+        self.status = ModellingStatus.EDITED
+        return new_index
+
+    def delete_vertex(self, index: int) -> None:
+        self.mesh().delete_vertex(index)
+        self.status = ModellingStatus.EDITED
+
     def _fallback_height(self) -> float:
         if self.lidar_stats and "top_height" in self.lidar_stats:
             return float(self.lidar_stats["top_height"])

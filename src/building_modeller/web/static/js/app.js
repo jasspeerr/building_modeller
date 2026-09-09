@@ -36,6 +36,12 @@
     vertexY: document.getElementById("vertex-y"),
     vertexZ: document.getElementById("vertex-z"),
     btnSnapLidar: document.getElementById("btn-snap-lidar"),
+    btnDeleteVertex: document.getElementById("btn-delete-vertex"),
+    edgePanel: document.getElementById("edge-panel"),
+    edgeA: document.getElementById("edge-a"),
+    edgeB: document.getElementById("edge-b"),
+    edgeNotAdjacent: document.getElementById("edge-not-adjacent"),
+    btnSplitEdge: document.getElementById("btn-split-edge"),
     btnSaveSession: document.getElementById("btn-save-session"),
     btnLoadSession: document.getElementById("btn-load-session"),
     loadSessionFile: document.getElementById("load-session-file"),
@@ -47,6 +53,7 @@
     selectedBagId: null,
     meshData: null, // last-fetched {vertices, triangles, faces} for the selected building
     selectedVertexIndex: null,
+    secondaryVertexIndex: null, // shift+click target, for edge selection
     updatingPanel: false,
   };
 
@@ -117,6 +124,7 @@
 
   const VERTEX_COLOR = 0xffe066;
   const VERTEX_SELECTED_COLOR = 0x33e0ff;
+  const VERTEX_SECONDARY_COLOR = 0xb066ff;
   const vertexGeometry = new THREE.SphereGeometry(0.25, 10, 8);
 
   function resizeRenderer() {
@@ -232,14 +240,18 @@
     scene.add(vertexMarkerGroup);
   }
 
+  function colorForVertex(i) {
+    if (i === state.selectedVertexIndex) return VERTEX_SELECTED_COLOR;
+    if (i === state.secondaryVertexIndex) return VERTEX_SECONDARY_COLOR;
+    return VERTEX_COLOR;
+  }
+
   function renderVertexMarkers(meshData) {
     clearVertexMarkers();
     if (!meshData) return;
     const n = meshData.vertices.length / 3;
     for (let i = 0; i < n; i++) {
-      const material = new THREE.MeshBasicMaterial({
-        color: i === state.selectedVertexIndex ? VERTEX_SELECTED_COLOR : VERTEX_COLOR,
-      });
+      const material = new THREE.MeshBasicMaterial({ color: colorForVertex(i) });
       const marker = new THREE.Mesh(vertexGeometry, material);
       marker.position.set(
         meshData.vertices[i * 3],
@@ -342,15 +354,52 @@
 
   function selectVertex(index) {
     state.selectedVertexIndex = index;
+    state.secondaryVertexIndex = null;
     renderVertexMarkers(state.meshData);
     fillVertexForm();
+    updateEdgePanel();
+  }
+
+  function selectSecondaryVertex(index) {
+    state.secondaryVertexIndex = index;
+    renderVertexMarkers(state.meshData);
+    updateEdgePanel();
   }
 
   function deselectVertex() {
     state.selectedVertexIndex = null;
+    state.secondaryVertexIndex = null;
     els.vertexPanelEmpty.hidden = false;
     els.vertexForm.hidden = true;
     if (state.meshData) renderVertexMarkers(state.meshData);
+    updateEdgePanel();
+  }
+
+  function edgeIsAdjacent(meshData, a, b) {
+    for (const f of meshData.faces) {
+      const idx = f.indices;
+      const n = idx.length;
+      for (let i = 0; i < n; i++) {
+        const pair = new Set([idx[i], idx[(i + 1) % n]]);
+        if (pair.has(a) && pair.has(b) && pair.size === 2) return true;
+      }
+    }
+    return false;
+  }
+
+  function updateEdgePanel() {
+    const a = state.selectedVertexIndex;
+    const b = state.secondaryVertexIndex;
+    if (a === null || b === null || !state.meshData) {
+      els.edgePanel.hidden = true;
+      return;
+    }
+    els.edgePanel.hidden = false;
+    els.edgeA.textContent = a;
+    els.edgeB.textContent = b;
+    const adjacent = edgeIsAdjacent(state.meshData, a, b);
+    els.edgeNotAdjacent.hidden = adjacent;
+    els.btnSplitEdge.hidden = !adjacent;
   }
 
   function fillVertexForm() {
@@ -396,6 +445,7 @@
     renderBuildingMesh(result.mesh);
     renderVertexMarkers(result.mesh);
     fillVertexForm();
+    updateEdgePanel();
   }
 
   els.vertexX.addEventListener("change", submitVertexForm);
@@ -412,6 +462,44 @@
       showWarnings([]);
     } catch (err) {
       showWarnings([`Snap to LiDAR failed: ${err.message}`]);
+    }
+  });
+
+  els.btnDeleteVertex.addEventListener("click", async () => {
+    if (state.selectedVertexIndex === null || !state.selectedBagId) return;
+    const bagId = state.selectedBagId;
+    const index = state.selectedVertexIndex;
+    try {
+      const result = await apiPostJSON(
+        `/api/buildings/${encodeURIComponent(bagId)}/vertex/${index}/delete`
+      );
+      // Deleting reindexes every vertex after it, so the previous
+      // selection is no longer meaningful -- deselect rather than guess.
+      state.selectedVertexIndex = null;
+      state.secondaryVertexIndex = null;
+      applyMeshUpdate(bagId, result);
+      deselectVertex();
+      showWarnings([]);
+    } catch (err) {
+      showWarnings([`Failed to delete vertex: ${err.message}`]);
+    }
+  });
+
+  els.btnSplitEdge.addEventListener("click", async () => {
+    const a = state.selectedVertexIndex;
+    const b = state.secondaryVertexIndex;
+    if (a === null || b === null || !state.selectedBagId) return;
+    const bagId = state.selectedBagId;
+    try {
+      const result = await apiPostJSON(`/api/buildings/${encodeURIComponent(bagId)}/edge/split`, {
+        index_a: a,
+        index_b: b,
+      });
+      applyMeshUpdate(bagId, result);
+      selectVertex(result.new_vertex_index); // jump straight to the new vertex
+      showWarnings([]);
+    } catch (err) {
+      showWarnings([`Failed to split edge: ${err.message}`]);
     }
   });
 
@@ -439,6 +527,16 @@
     // the start of its own pointerdown handling on the same canvas, so
     // this stops it from also starting a camera-rotate on this event.
     controls.enabled = false;
+
+    if (event.shiftKey && state.selectedVertexIndex !== null && index !== state.selectedVertexIndex) {
+      // Shift+click a second, different vertex: pick an edge, don't drag.
+      // No dragState is set here, so endDrag() never runs for this event
+      // -- re-enable orbiting immediately rather than leaving it stuck off.
+      selectSecondaryVertex(index);
+      controls.enabled = true;
+      return;
+    }
+
     selectVertex(index);
     dragState = {
       index,

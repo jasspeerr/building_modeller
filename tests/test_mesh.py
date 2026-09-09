@@ -69,6 +69,93 @@ class TestMoveVertex:
             mesh.move_vertex(999, (0.0, 0.0, 0.0))
 
 
+class TestSplitEdge:
+    def test_splits_interior_eave_edge_shared_by_two_faces(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof_face = mesh.faces_by_type("roof")[0]
+        # First two roof vertices are the eave edge shared with a wall face.
+        a, b = roof_face.vertex_indices[0], roof_face.vertex_indices[1]
+        sharing = mesh.edge_faces(a, b)
+        assert len(sharing) == 2
+
+        n_before = len(mesh.vertices)
+        new_index = mesh.split_edge(a, b)
+
+        assert new_index == n_before
+        assert len(mesh.vertices) == n_before + 1
+        expected_midpoint = tuple((x + y) / 2.0 for x, y in zip(mesh.vertices[a], mesh.vertices[b]))
+        assert mesh.vertices[new_index] == pytest.approx(expected_midpoint)
+        for face in sharing:
+            assert new_index in face.vertex_indices
+
+    def test_new_vertex_sits_between_the_two_endpoints_in_the_ring(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        roof_face = mesh.faces_by_type("roof")[0]
+        a, b = roof_face.vertex_indices[0], roof_face.vertex_indices[1]
+        new_index = mesh.split_edge(a, b)
+        idx = roof_face.vertex_indices
+        pos_a, pos_new = idx.index(a), idx.index(new_index)
+        assert pos_new == (pos_a + 1) % len(idx)
+
+    def test_raises_for_non_adjacent_vertices(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        # Diagonal roof corners are never adjacent in the same face.
+        roof_face = mesh.faces_by_type("roof")[0]
+        a, c = roof_face.vertex_indices[0], roof_face.vertex_indices[2]
+        with pytest.raises(ValueError):
+            mesh.split_edge(a, c)
+
+    def test_edge_faces_for_disconnected_vertices_is_empty(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        assert mesh.edge_faces(0, 999) == []
+
+
+class TestDeleteVertex:
+    def test_removes_vertex_from_every_referencing_face(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        ground_face = mesh.faces_by_type("ground")[0]
+        idx = ground_face.vertex_indices[0]
+        faces_before = [f for f in mesh.faces if idx in f.vertex_indices]
+        assert len(faces_before) >= 2
+
+        mesh.delete_vertex(idx)
+
+        assert len(mesh.vertices) == 7
+        assert all(len(f.vertex_indices) >= 3 for f in mesh.faces)
+        assert all(0 <= i < len(mesh.vertices) for f in mesh.faces for i in f.vertex_indices)
+
+    def test_reindexes_higher_vertex_indices_down_by_one(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        removed = 3
+        # Snapshot which faces referenced vertex removed+1 before deletion.
+        had_four = {id(f) for f in mesh.faces if (removed + 1) in f.vertex_indices}
+
+        mesh.delete_vertex(removed)
+
+        for face in mesh.faces:
+            assert max(face.vertex_indices) < len(mesh.vertices)
+        # Every face that used to reference `removed + 1` must now reference
+        # `removed` instead (shifted down by one), assuming it survived.
+        for face in mesh.faces:
+            if id(face) in had_four:
+                assert removed in face.vertex_indices
+
+    def test_drops_faces_that_collapse_below_three_vertices(self):
+        # A standalone triangle plus one unrelated vertex.
+        mesh = EditableMesh(
+            vertices=[(0, 0, 0), (1, 0, 0), (0, 1, 0), (5, 5, 5)],
+            faces=[Face(vertex_indices=[0, 1, 2], surface_type="roof")],
+        )
+        mesh.delete_vertex(0)
+        assert mesh.faces == []
+        assert len(mesh.vertices) == 3
+
+    def test_out_of_range_index_raises(self):
+        mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)
+        with pytest.raises(IndexError):
+            mesh.delete_vertex(999)
+
+
 class TestPayloadRoundTrip:
     def test_round_trips(self):
         mesh = seed_flat_box(box(0, 0, 10, 6), ground_height=0.0, roof_height=3.0)

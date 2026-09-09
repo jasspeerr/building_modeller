@@ -49,6 +49,66 @@ class EditableMesh:
             raise IndexError(f"vertex index {index} out of range (0..{len(self.vertices) - 1})")
         self.vertices[index] = (float(position[0]), float(position[1]), float(position[2]))
 
+    def edge_faces(self, index_a: int, index_b: int) -> List[Face]:
+        """Faces where ``index_a``/``index_b`` are adjacent vertices (in
+        either direction) -- i.e. the faces that share this edge."""
+        target = {index_a, index_b}
+        result = []
+        for face in self.faces:
+            idx = face.vertex_indices
+            n = len(idx)
+            for i in range(n):
+                if {idx[i], idx[(i + 1) % n]} == target:
+                    result.append(face)
+                    break
+        return result
+
+    def split_edge(self, index_a: int, index_b: int) -> int:
+        """Insert a new vertex at the midpoint of the edge between
+        ``index_a`` and ``index_b``, in every face that has this edge (an
+        interior edge is shared by two faces; both get the new vertex, so
+        the mesh stays watertight). Returns the new vertex's index.
+
+        Raises ``ValueError`` if the two vertices are never adjacent in
+        any face (there is no such edge to split)."""
+        faces = self.edge_faces(index_a, index_b)
+        if not faces:
+            raise ValueError(f"vertices {index_a} and {index_b} are not adjacent in any face")
+
+        ax, ay, az = self.vertices[index_a]
+        bx, by, bz = self.vertices[index_b]
+        midpoint = ((ax + bx) / 2.0, (ay + by) / 2.0, (az + bz) / 2.0)
+        new_index = len(self.vertices)
+        self.vertices.append(midpoint)
+
+        target = {index_a, index_b}
+        for face in faces:
+            idx = face.vertex_indices
+            n = len(idx)
+            for i in range(n):
+                if {idx[i], idx[(i + 1) % n]} == target:
+                    idx.insert(i + 1, new_index)
+                    break
+        return new_index
+
+    def delete_vertex(self, index: int) -> None:
+        """Remove a vertex, dropping it from every face's ring (a face
+        that would collapse below 3 vertices is removed entirely), then
+        compact the vertex pool so indices stay contiguous."""
+        if not (0 <= index < len(self.vertices)):
+            raise IndexError(f"vertex index {index} out of range (0..{len(self.vertices) - 1})")
+
+        new_faces = []
+        for face in self.faces:
+            remaining = [i for i in face.vertex_indices if i != index]
+            if len(remaining) >= 3:
+                new_faces.append(Face(vertex_indices=remaining, surface_type=face.surface_type))
+        self.faces = new_faces
+
+        del self.vertices[index]
+        for face in self.faces:
+            face.vertex_indices = [i - 1 if i > index else i for i in face.vertex_indices]
+
 
 def _exterior_ring_ccw(polygon: Polygon) -> List[Tuple[float, float]]:
     oriented = orient(polygon, sign=1.0)

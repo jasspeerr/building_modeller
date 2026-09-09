@@ -223,6 +223,43 @@ def create_app() -> Flask:
             }
         )
 
+    @app.post("/api/buildings/<bag_id>/vertex/<int:index>/delete")
+    def delete_vertex(bag_id: str, index: int):
+        building = _find_building(bag_id)
+        with state_lock:
+            try:
+                building.delete_vertex(index)
+            except IndexError as exc:
+                abort(404, str(exc))
+        autosave.save(state.buildings)
+        return jsonify(
+            {"building": _building_summary(building), "mesh": mesh_to_render_data(building.mesh(), state.origin)}
+        )
+
+    @app.post("/api/buildings/<bag_id>/edge/split")
+    def split_edge(bag_id: str):
+        building = _find_building(bag_id)
+        data = request.get_json(force=True)
+        try:
+            index_a = int(data["index_a"])
+            index_b = int(data["index_b"])
+        except (KeyError, TypeError, ValueError):
+            abort(400, "expected integer index_a, index_b")
+
+        with state_lock:
+            try:
+                new_index = building.split_edge(index_a, index_b)
+            except (IndexError, ValueError) as exc:
+                abort(400, str(exc))
+        autosave.save(state.buildings)
+        return jsonify(
+            {
+                "building": _building_summary(building),
+                "mesh": mesh_to_render_data(building.mesh(), state.origin),
+                "new_vertex_index": new_index,
+            }
+        )
+
     @app.get("/api/pointcloud")
     def get_point_cloud():
         return jsonify(_point_cloud_payload(state.lidar_cloud, state.origin))

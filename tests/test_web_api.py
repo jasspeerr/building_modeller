@@ -157,6 +157,54 @@ class TestBuildings:
         assert res.status_code == 404
 
 
+class TestEdgeSplit:
+    def test_splits_shared_edge_and_selects_new_vertex(self, client):
+        building = Building(bag_id="A", footprint=box(0, 0, 10, 6))
+        server_module.state.buildings = [building]
+        roof_face = building.mesh().faces_by_type("roof")[0]
+        a, b = roof_face.vertex_indices[0], roof_face.vertex_indices[1]
+
+        res = client.post("/api/buildings/A/edge/split", json={"index_a": a, "index_b": b})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["building"]["status"] == "edited"
+        new_index = data["new_vertex_index"]
+        assert len(data["mesh"]["vertices"]) // 3 == new_index + 1
+
+    def test_split_non_adjacent_vertices_400(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/edge/split", json={"index_a": 0, "index_b": 5})
+        assert res.status_code == 400
+
+    def test_split_edge_on_unknown_building_404(self, client):
+        res = client.post("/api/buildings/nope/edge/split", json={"index_a": 0, "index_b": 1})
+        assert res.status_code == 404
+
+    def test_split_edge_missing_fields_400(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/edge/split", json={})
+        assert res.status_code == 400
+
+
+class TestVertexDelete:
+    def test_deletes_vertex_and_updates_status(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/vertex/0/delete")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["building"]["status"] == "edited"
+        assert len(data["mesh"]["vertices"]) // 3 == 7
+
+    def test_delete_vertex_on_unknown_building_404(self, client):
+        res = client.post("/api/buildings/nope/vertex/0/delete")
+        assert res.status_code == 404
+
+    def test_delete_vertex_out_of_range_404(self, client):
+        server_module.state.buildings = [Building(bag_id="A", footprint=box(0, 0, 10, 6))]
+        res = client.post("/api/buildings/A/vertex/999/delete")
+        assert res.status_code == 404
+
+
 class TestSession:
     def test_round_trip_preserves_edited_geometry_and_recomputes_origin(self, client):
         b = Building(bag_id="A", footprint=box(0, 0, 10, 6))

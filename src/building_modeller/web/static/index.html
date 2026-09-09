@@ -60,6 +60,7 @@
         <p class="hint">
           Click a vertex marker to select it, then drag it vertically
           (click and hold, move up/down) or type exact coordinates below.
+          Shift+click a second vertex to select an edge between them.
         </p>
       </div>
     </section>
@@ -73,7 +74,15 @@
         <label>Y (m)<input type="number" step="0.1" id="vertex-y"></label>
         <label>Z (m)<input type="number" step="0.1" id="vertex-z"></label>
         <button type="button" id="btn-snap-lidar">Snap to LiDAR (Z)</button>
+        <button type="button" id="btn-delete-vertex" class="danger">Delete vertex</button>
       </form>
+    </section>
+
+    <section class="panel-box" id="edge-panel" hidden>
+      <h2>Selected edge</h2>
+      <div class="hint">Vertex <span id="edge-a"></span> &ndash; vertex <span id="edge-b"></span></div>
+      <div id="edge-not-adjacent" class="hint" hidden>These vertices aren't directly connected by an edge.</div>
+      <button type="button" id="btn-split-edge" hidden>Split edge (add vertex)</button>
     </section>
   </aside>
 </div>
