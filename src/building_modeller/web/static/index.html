@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building Modeller</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<header id="app-header">
+  <h1>Building Modeller</h1>
+  <div id="header-actions">
+    <button id="btn-save-session">Save session</button>
+    <button id="btn-load-session">Load session</button>
+    <input id="load-session-file" type="file" accept="application/json" hidden>
+    <button id="btn-export" class="primary">Export CityGML</button>
+  </div>
+</header>
+
+<div id="layout">
+  <aside id="left-panel">
+    <section class="panel-box">
+      <h2>Area</h2>
+      <form id="area-form">
+        <label>min X (RD)<input type="number" step="any" id="bbox-minx" value="84000"></label>
+        <label>min Y (RD)<input type="number" step="any" id="bbox-miny" value="447000"></label>
+        <label>max X (RD)<input type="number" step="any" id="bbox-maxx" value="84300"></label>
+        <label>max Y (RD)<input type="number" step="any" id="bbox-maxy" value="447300"></label>
+        <label>AHN6 LAZ folder (server-local path)
+          <input type="text" id="lidar-folder" placeholder="e.g. C:\ahn6\tiles">
+        </label>
+        <button type="submit" class="primary">Load area (BAG + LiDAR)</button>
+      </form>
+      <p class="hint">
+        Fetches BAG footprints from PDOK for this bounding box. The LiDAR
+        folder is a path on the machine running this server (not a
+        browser upload) -- it's scanned for local AHN6 .laz/.las tiles.
+      </p>
+      <div id="warnings"></div>
+    </section>
+
+    <section class="panel-box" id="building-list-box">
+      <h2>Buildings</h2>
+      <ul id="building-list"></ul>
+    </section>
+  </aside>
+
+  <main id="viewport-container">
+    <canvas id="viewport"></canvas>
+    <div id="viewport-hint">Load an area to begin.</div>
+  </main>
+
+  <aside id="right-panel">
+    <section class="panel-box" id="building-panel">
+      <h2>Selected building</h2>
+      <div id="building-panel-empty">No building selected.</div>
+      <form id="roof-form" hidden>
+        <label>BAG ID <span id="roof-bag-id"></span></label>
+        <div id="roof-lidar-stats" class="hint"></div>
+        <label>Roof type
+          <select id="roof-type">
+            <option value="flat">flat</option>
+            <option value="shed">shed</option>
+            <option value="gable">gable</option>
+            <option value="hip">hip</option>
+            <option value="pyramid">pyramid</option>
+          </select>
+        </label>
+        <label>Ridge along
+          <select id="roof-ridge-along">
+            <option value="long">long</option>
+            <option value="short">short</option>
+          </select>
+        </label>
+        <label>Eave height (m)<input type="number" step="0.1" id="roof-eave"></label>
+        <label>Ridge height (m)<input type="number" step="0.1" id="roof-ridge"></label>
+        <button type="button" id="btn-lidar-suggest">Use LiDAR suggestion</button>
+      </form>
+    </section>
+  </aside>
+</div>
+
+<script src="/static/vendor/three.min.js"></script>
+<script src="/static/vendor/OrbitControls.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

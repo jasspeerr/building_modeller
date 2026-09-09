@@ -1,6 +1,9 @@
-"""Save/load a modelling session (a batch of buildings + their state) to a
-local JSON file, so a batch can be worked on across multiple runs of the
-app before export."""
+"""Save/load a modelling session (a batch of buildings + their state) as
+JSON, so a batch can be worked on across multiple runs of the app before
+export. ``session_to_payload``/``session_from_payload`` work with plain
+dicts so the web API can serve/accept a session without going through a
+file on the server's disk; ``save_session``/``load_session`` are thin
+file-based wrappers around them."""
 from __future__ import annotations
 
 import json
@@ -43,18 +46,24 @@ def _building_from_dict(data: dict) -> Building:
     )
 
 
-def save_session(buildings: List[Building], path: str) -> None:
-    payload = {
+def session_to_payload(buildings: List[Building]) -> dict:
+    return {
         "format_version": SESSION_FORMAT_VERSION,
         "buildings": [_building_to_dict(b) for b in buildings],
     }
-    Path(path).write_text(json.dumps(payload, indent=2))
 
 
-def load_session(path: str) -> List[Building]:
-    payload = json.loads(Path(path).read_text())
+def session_from_payload(payload: dict) -> List[Building]:
     if payload.get("format_version") != SESSION_FORMAT_VERSION:
         raise ValueError(
             f"unsupported session format version: {payload.get('format_version')!r}"
         )
     return [_building_from_dict(b) for b in payload["buildings"]]
+
+
+def save_session(buildings: List[Building], path: str) -> None:
+    Path(path).write_text(json.dumps(session_to_payload(buildings), indent=2))
+
+
+def load_session(path: str) -> List[Building]:
+    return session_from_payload(json.loads(Path(path).read_text()))
