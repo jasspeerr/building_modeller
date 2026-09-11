@@ -46,3 +46,21 @@ def mesh_to_render_data(mesh: EditableMesh, origin: Tuple[float, float, float]) 
 
     faces = [{"indices": f.vertex_indices, "surface_type": f.surface_type} for f in mesh.faces]
     return {"vertices": vertices, "triangles": triangles, "faces": faces}
+
+
+def terrain_to_render_data(terrain, origin: Tuple[float, float, float]) -> dict:
+    """The same flat-array convention for the terrain TIN.
+
+    Returns empty arrays rather than ``None`` when there is no terrain, so
+    the frontend has a single code path.
+    """
+    if terrain is None:
+        return {"vertices": [], "triangles": []}
+    ox, oy, oz = origin
+    vertices: List[float] = []
+    for x, y, z in terrain.vertices:
+        vertices.extend((x - ox, y - oy, z - oz))
+    triangles: List[int] = []
+    for a, b, c in terrain.triangles:
+        triangles.extend((a, b, c))
+    return {"vertices": vertices, "triangles": triangles}

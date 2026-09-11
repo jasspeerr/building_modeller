@@ -39,6 +39,21 @@
       <div id="warnings"></div>
     </section>
 
+    <section class="panel-box" id="pointcloud-box">
+      <h2>Point cloud</h2>
+      <label>Colour by
+        <select id="pc-color-mode">
+          <option value="elevation">elevation</option>
+          <option value="classification">classification</option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="pc-hide-vegetation">
+        Hide vegetation &amp; noise
+      </label>
+      <div id="pc-legend" class="hint"></div>
+    </section>
+
     <section class="panel-box" id="building-list-box">
       <h2>Buildings</h2>
       <ul id="building-list"></ul>
@@ -48,6 +63,14 @@
   <main id="viewport-container">
     <canvas id="viewport"></canvas>
     <div id="viewport-hint">Load an area to begin.</div>
+    <div id="loading-overlay" hidden>
+      <div id="loading-card">
+        <div id="loading-phase">Loading...</div>
+        <div class="progress-track"><div class="progress-fill" id="loading-fill"></div></div>
+        <div id="loading-message" class="hint"></div>
+        <button type="button" id="btn-cancel-load">Cancel</button>
+      </div>
+    </div>
   </main>
 
   <aside id="right-panel">

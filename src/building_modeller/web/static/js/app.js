@@ -50,6 +50,15 @@
     btnLoadSession: document.getElementById("btn-load-session"),
     loadSessionFile: document.getElementById("load-session-file"),
     btnExport: document.getElementById("btn-export"),
+    areaSubmit: document.querySelector("#area-form button[type=submit]"),
+    loadingOverlay: document.getElementById("loading-overlay"),
+    loadingPhase: document.getElementById("loading-phase"),
+    loadingFill: document.getElementById("loading-fill"),
+    loadingMessage: document.getElementById("loading-message"),
+    btnCancelLoad: document.getElementById("btn-cancel-load"),
+    pcColorMode: document.getElementById("pc-color-mode"),
+    pcHideVegetation: document.getElementById("pc-hide-vegetation"),
+    pcLegend: document.getElementById("pc-legend"),
   };
 
   const state = {
@@ -59,6 +68,9 @@
     selectedVertexIndex: null,
     secondaryVertexIndex: null, // shift+click target, for edge selection
     updatingPanel: false,
+    pointCloud: null, // last-fetched payload, kept so re-colouring needs no refetch
+    jobId: null,
+    jobProgress: 0, // client-side monotonic guard: polls can land out of order
   };
 
   // ---- API helpers --------------------------------------------------
@@ -123,6 +135,7 @@
   scene.add(footprintGroup);
   let pointCloudObject = null;
   let buildingMeshObject = null;
+  let terrainObject = null;
   let vertexMarkerGroup = new THREE.Group();
   scene.add(vertexMarkerGroup);
 
@@ -130,6 +143,26 @@
   const VERTEX_SELECTED_COLOR = 0x33e0ff;
   const VERTEX_SECONDARY_COLOR = 0xb066ff;
   const vertexGeometry = new THREE.SphereGeometry(0.25, 10, 8);
+
+  // ASPRS classes, matching data/pointcloud.py's constants.
+  const CLASS_COLORS = {
+    2: 0x8a7a5c, // ground
+    6: 0xd9522e, // building
+    3: 0x3f8f4f, // low vegetation
+    4: 0x4fae5f, // medium vegetation
+    5: 0x5fd070, // high vegetation
+    9: 0x2f7fc0, // water
+    7: 0x606870, // noise
+    18: 0x606870, // high noise
+  };
+  const CLASS_LABELS = {
+    2: "ground",
+    6: "building",
+    5: "vegetation",
+    9: "water",
+    7: "noise",
+  };
+  const CLASS_OTHER_COLOR = 0x9aa6b2;
 
   function resizeRenderer() {
     const w = canvas.clientWidth;
@@ -177,16 +210,24 @@
     return new THREE.Color(t, 0.3, 1.0 - t);
   }
 
+  function classColor(code) {
+    const hex = CLASS_COLORS[code];
+    return new THREE.Color(hex === undefined ? CLASS_OTHER_COLOR : hex);
+  }
+
   function renderPointCloud(pc) {
+    state.pointCloud = pc;
     if (pointCloudObject) {
       scene.remove(pointCloudObject);
       pointCloudObject.geometry.dispose();
       pointCloudObject.material.dispose();
       pointCloudObject = null;
     }
+    renderPointCloudLegend();
     const n = pc.x.length;
     if (n === 0) return;
 
+    const byClass = els.pcColorMode.value === "classification" && pc.classification;
     let zmin = Infinity, zmax = -Infinity;
     for (let i = 0; i < n; i++) {
       if (pc.z[i] < zmin) zmin = pc.z[i];
@@ -200,8 +241,9 @@
       positions[i * 3] = pc.x[i];
       positions[i * 3 + 1] = pc.y[i];
       positions[i * 3 + 2] = pc.z[i];
-      const t = (pc.z[i] - zmin) / span;
-      const c = elevationColor(t);
+      const c = byClass
+        ? classColor(pc.classification[i])
+        : elevationColor((pc.z[i] - zmin) / span);
       colors[i * 3] = c.r;
       colors[i * 3 + 1] = c.g;
       colors[i * 3 + 2] = c.b;
@@ -212,6 +254,71 @@
     const material = new THREE.PointsMaterial({ size: 0.6, vertexColors: true });
     pointCloudObject = new THREE.Points(geometry, material);
     scene.add(pointCloudObject);
+  }
+
+  function renderPointCloudLegend() {
+    els.pcLegend.innerHTML = "";
+    if (els.pcColorMode.value !== "classification") return;
+    for (const code of Object.keys(CLASS_LABELS)) {
+      const row = document.createElement("div");
+      row.className = "legend-row";
+      const swatch = document.createElement("span");
+      swatch.className = "legend-swatch";
+      swatch.style.background = "#" + classColor(Number(code)).getHexString();
+      const label = document.createElement("span");
+      label.textContent = CLASS_LABELS[code];
+      row.appendChild(swatch);
+      row.appendChild(label);
+      els.pcLegend.appendChild(row);
+    }
+  }
+
+  function renderTerrain(data) {
+    if (terrainObject) {
+      scene.remove(terrainObject);
+      terrainObject.geometry.dispose();
+      terrainObject.material.dispose();
+      terrainObject = null;
+    }
+    if (!data || !data.vertices || data.vertices.length === 0) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(data.vertices), 3)
+    );
+    geometry.setIndex(data.triangles);
+    geometry.computeVertexNormals();
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x5b6b57,
+      side: THREE.DoubleSide,
+      flatShading: true,
+      // Each building's footprint cells are stamped with that building's
+      // own ground height, so the terrain there is exactly coplanar with
+      // its GroundSurface. Nudge the terrain back in the depth buffer so
+      // the pair doesn't z-fight.
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
+    });
+    terrainObject = new THREE.Mesh(geometry, material);
+    scene.add(terrainObject);
+  }
+
+  async function refreshTerrain() {
+    try {
+      renderTerrain(await apiGetJSON("/api/terrain"));
+    } catch (err) {
+      console.warn("Could not load terrain:", err);
+    }
+  }
+
+  async function refreshPointCloud() {
+    const query = els.pcHideVegetation.checked ? "?hide_vegetation=1" : "";
+    try {
+      renderPointCloud(await apiGetJSON("/api/pointcloud" + query));
+    } catch (err) {
+      showWarnings([`Could not load point cloud: ${err.message}`]);
+    }
   }
 
   function renderBuildingMesh(meshData) {
@@ -296,7 +403,7 @@
     state.meshData = null;
     state.selectedVertexIndex = null;
     renderFootprints(state.buildings);
-    renderPointCloud(options.pointCloud || { x: [], y: [], z: [] });
+    renderPointCloud(options.pointCloud || { x: [], y: [], z: [], classification: [] });
     renderBuildingMesh(null);
     clearVertexMarkers();
     renderBuildingList();
@@ -662,25 +769,136 @@
     ];
     const lidarFolder = els.lidarFolder.value;
 
-    els.viewportHint.textContent = "Loading...";
     try {
-      const result = await apiPostJSON("/api/area", { bbox, lidar_folder: lidarFolder });
-      applyBuildingsResult(result.buildings, {
-        pointCloud: result.point_cloud,
-        hint: result.buildings.length ? "" : "No buildings found for this area.",
-      });
-      showWarnings(result.warnings);
-      if (result.point_cloud.total_points > result.point_cloud.shown_points) {
-        showWarnings([
-          ...(result.warnings || []),
-          `Point cloud decimated for display: showing ${result.point_cloud.shown_points} of ${result.point_cloud.total_points} points.`,
-        ]);
-      }
+      const started = await apiPostJSON("/api/area", { bbox, lidar_folder: lidarFolder });
+      state.jobId = started.job_id;
+      state.jobProgress = 0;
+      setBusy(true);
+      showOverlay("Starting", 0, false, "");
+      pollAreaJob();
     } catch (err) {
-      els.viewportHint.textContent = "";
-      showWarnings([`Failed to load area: ${err.message}`]);
+      setBusy(false);
+      hideOverlay();
+      showWarnings([`Failed to start area load: ${err.message}`]);
     }
   });
+
+  function pollAreaJob() {
+    setTimeout(async () => {
+      // Re-armed after each response rather than setInterval, so a slow
+      // response can't let polls stack up.
+      if (!state.jobId) return;
+      let job;
+      try {
+        job = await apiGetJSON(`/api/area/jobs/${state.jobId}`);
+      } catch (err) {
+        // 404 means the job is gone (server restart, or evicted from the
+        // history): stop polling and re-sync rather than hanging forever.
+        finishAreaJob();
+        showWarnings([`Lost track of the area load: ${err.message}`]);
+        await resyncFromServer();
+        return;
+      }
+      updateOverlay(job);
+      if (job.state === "running") {
+        pollAreaJob();
+        return;
+      }
+      finishAreaJob();
+      if (job.state === "error") {
+        showWarnings([`Area load failed: ${job.error}`]);
+        return;
+      }
+      if (job.state === "cancelled") {
+        showWarnings(["Area load cancelled."]);
+        return;
+      }
+      await applyFinishedLoad(job);
+    }, 300);
+  }
+
+  async function applyFinishedLoad(job) {
+    const listing = await apiGetJSON("/api/buildings");
+    applyBuildingsResult(listing.buildings, {
+      hint: listing.buildings.length ? "" : "No buildings found for this area.",
+    });
+    await refreshPointCloud();
+    await refreshTerrain();
+
+    const warnings = (job.warnings || []).slice();
+    const pc = state.pointCloud;
+    if (pc && pc.total_points > pc.shown_points) {
+      warnings.push(
+        `Point cloud decimated for display: showing ${pc.shown_points} of ${pc.total_points} points.`
+      );
+    }
+    showWarnings(warnings);
+  }
+
+  async function resyncFromServer() {
+    try {
+      const listing = await apiGetJSON("/api/buildings");
+      applyBuildingsResult(listing.buildings);
+      await refreshTerrain();
+    } catch (err) {
+      console.warn("Could not re-sync:", err);
+    }
+  }
+
+  function finishAreaJob() {
+    state.jobId = null;
+    setBusy(false);
+    hideOverlay();
+  }
+
+  function showOverlay(phase, progress, determinate, message) {
+    els.loadingOverlay.hidden = false;
+    updateOverlayFields(phase, progress, determinate, message);
+  }
+
+  function updateOverlay(job) {
+    // Polls can complete out of order, so never let the bar go backwards.
+    const progress = Math.max(state.jobProgress, job.progress || 0);
+    state.jobProgress = progress;
+    updateOverlayFields(job.phase, progress, job.determinate, job.message);
+  }
+
+  function updateOverlayFields(phase, progress, determinate, message) {
+    els.loadingPhase.textContent = phase || "Loading";
+    els.loadingMessage.textContent = message || "";
+    const track = els.loadingFill.parentElement;
+    track.classList.toggle("indeterminate", !determinate);
+    els.loadingFill.style.width = determinate ? `${progress}%` : "";
+  }
+
+  function hideOverlay() {
+    els.loadingOverlay.hidden = true;
+  }
+
+  function setBusy(busy) {
+    // Nothing disabled these before, so a double-submit fired two full loads.
+    for (const el of [els.areaSubmit, els.btnSaveSession, els.btnLoadSession, els.btnExport]) {
+      if (el) el.disabled = busy;
+    }
+  }
+
+  els.btnCancelLoad.addEventListener("click", async () => {
+    if (!state.jobId) return;
+    els.btnCancelLoad.disabled = true;
+    try {
+      await apiPostJSON(`/api/area/jobs/${state.jobId}/cancel`);
+    } catch (err) {
+      showWarnings([`Could not cancel: ${err.message}`]);
+    } finally {
+      els.btnCancelLoad.disabled = false;
+    }
+  });
+
+  els.pcColorMode.addEventListener("change", () => {
+    if (state.pointCloud) renderPointCloud(state.pointCloud);
+  });
+
+  els.pcHideVegetation.addEventListener("change", refreshPointCloud);
 
   // ---- Session save/load, export -------------------------------------
 
@@ -705,7 +923,10 @@
       if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
       applyBuildingsResult(result.buildings);
-      showWarnings([]);
+      renderTerrain(null); // an uploaded session carries no cloud or terrain
+      showWarnings([
+        "Loaded session. Reload the area to bring back the LiDAR point cloud and terrain.",
+      ]);
     } catch (err) {
       showWarnings([`Failed to load session: ${err.message}`]);
     } finally {
@@ -733,7 +954,7 @@
         applyBuildingsResult(result.buildings);
         showWarnings([
           `Restored previous session (${result.buildings.length} building(s)). ` +
-            "Reload the area to bring back the LiDAR point cloud.",
+            "Reload the area to bring back the LiDAR point cloud and terrain.",
         ]);
       }
     } catch (err) {
