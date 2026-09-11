@@ -813,7 +813,14 @@
         showWarnings(["Area load cancelled."]);
         return;
       }
-      await applyFinishedLoad(job);
+      try {
+        await applyFinishedLoad(job);
+      } catch (err) {
+        // Nothing awaits this async setTimeout callback, so without this the
+        // failure would only ever surface as an unhandled rejection in the
+        // console: the overlay closes and no buildings appear, silently.
+        showWarnings([`Area loaded but could not be displayed: ${err.message}`]);
+      }
     }, 300);
   }
 

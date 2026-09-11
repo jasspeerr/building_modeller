@@ -18,6 +18,7 @@ through ``server._run_in_background``. Three seams replace it here:
   which works fine inline and raises ``RuntimeError`` off-thread.
 """
 import json
+import re
 import threading
 import time
 from io import BytesIO
@@ -82,6 +83,25 @@ class TestStaticPages:
         res = client.get("/static/vendor/OrbitControls.js")
         assert res.status_code == 200
         assert b"OrbitControls" in res.data
+
+    def test_stylesheet_keeps_the_hidden_reset(self, client):
+        """A "don't delete this line" guard, not a behavioural test.
+
+        The `hidden` attribute is only honoured by the UA rule
+        `[hidden]{display:none}` at specificity 0,1,0, so an id-level
+        `display` silently beats it -- which is how the loading overlay
+        once became impossible to close. Roughly ten elements in this app
+        are toggled with `hidden`, and losing this reset breaks them
+        invisibly: the attribute still flips, nothing moves on screen.
+        `!important` is load-bearing here; a plain [hidden] rule loses to
+        an id selector no matter where it sits in the file.
+        """
+        res = client.get("/static/css/app.css")
+        assert res.status_code == 200
+        css = res.data.decode()
+        assert re.search(r"\[hidden\]\s*\{[^}]*display:\s*none\s*!important", css), (
+            "app.css lost its [hidden] { display: none !important } reset"
+        )
 
 
 class TestAreaLoading:

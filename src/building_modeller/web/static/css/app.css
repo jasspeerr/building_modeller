@@ -1,5 +1,13 @@
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute is only honoured by the UA rule `[hidden]{display:none}`
+   at specificity 0,1,0, so any id- or class-level `display` silently defeats it --
+   which is exactly how #loading-overlay ended up unable to close after a load.
+   This is the one place !important is the right tool: nothing should out-rank
+   "this element is not relevant". A plain [hidden] rule here would NOT work;
+   specificity beats source order. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
